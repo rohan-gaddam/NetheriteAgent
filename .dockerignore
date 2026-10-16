@@ -1,0 +1,31 @@
+.git
+.tools
+**/target
+**/node_modules
+**/dist
+**/dist-ssr
+**/build
+**/coverage
+**/*.log
+e2e/node_modules
+
+# Secrets and local configuration must never enter a Docker build context:
+# file-based docker compose secrets (infrastructure/docker/secrets/), the local
+# .env (and any environment copy), and the runtime OPA authz-token data dir.
+# Safe templates (.env.example, secrets.example/) stay included — they are docs.
+**/secrets/
+**/.env
+**/.env.*
+**/policies-data/
+**/maven-cp.txt
+*.dump
+*.bak
+infrastructure/docker/.p3tmp
+infrastructure/docker/_p3tmp
+**/.p3tmp/
+**/_p3tmp/
+infrastructure/docker/backups/
+**/backups/
+!**/.env.example
+!**/secrets.example/
+!**/secrets.example

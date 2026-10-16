@@ -1,0 +1,116 @@
+# NetheriteAgent production edge configuration.
+#
+# SITE_ADDRESS selects the certificate automatically:
+#   localhost            -> Caddy internal CA (used by the local clean-deploy
+#                           verification; curl -k trusts it)
+#   a real FQDN          -> automatic public HTTPS via ACME (Let's Encrypt etc.)
+#
+# BACKEND_UPSTREAM is the compose DNS name for the app service; Caddy resolves
+# every replica behind it and load-balances round-robin across them.
+
+{$SITE_ADDRESS:localhost}
+
+encode gzip
+
+# WS8: structured edge access log — one JSON object per line to stdout. Only a fixed,
+# safe field set is emitted (Caddy 2.8: format filter deletes the default verbose fields
+# {request, common_log, resp_headers, user_id, bytes_read}; log_append re-adds proto and
+# remote_ip via runtime placeholders, so the path is logged WITHOUT the query string and no
+# request or response headers are copied). request_id is Caddy's own per-request identifier
+# (top-level default field); the reverse_proxy below forwards the SAME value downstream as
+# X-Correlation-Id, and the Netherite correlation filter (Order -100) adopts an inbound
+# validated X-Correlation-Id and echoes it back — so one identifier joins edge, app and
+# security-tier log lines for the same request. Health-probe noise (/healthz,
+# /actuator/health*) is skipped.
+log {
+	output stdout
+	format filter {
+		request delete
+		common_log delete
+		resp_headers delete
+		user_id delete
+		bytes_read delete
+	}
+	level info
+}
+# request_id is Caddy's per-request UUID: once the reverse_proxy below touches
+# {http.request.uuid}, Caddy records it in every access line under the built-in
+# request_id field. The SAME value is forwarded downstream as X-Correlation-Id, which
+# the Netherite correlation filter (Order -100) adopts and echoes back — one identifier
+# joins edge, app and security-tier log lines for the same proxied request. Requests
+# answered purely at the edge (blocked /actuator/prometheus, static SPA) never touch
+# {http.request.uuid} and therefore carry no request_id, which is the documented
+# empty-join limitation.
+log_append method {method}
+log_append path {path}
+log_append proto {http.request.proto}
+log_append remote_ip {http.request.remote.host}
+log_skip /healthz*
+log_skip /actuator/health*
+
+# Transport security baseline: never negotiate anything older than TLS 1.2.
+# Cipher selection keeps the Go/H2 defaults (strong, actively maintained) —
+# there is no legacy-compat knob to accidentally keep weak suites enabled.
+tls {
+	protocols tls1.2 tls1.3
+}
+
+# Enterprise security headers on every response, API and SPA alike. The SPA is
+# self-contained (vite build emits one external, integrity-risk hatched module
+# script, no inline scripts), so a strict, self-only CSP is enforceable.
+header {
+	Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	X-Content-Type-Options "nosniff"
+	X-Frame-Options "DENY"
+	Referrer-Policy "no-referrer"
+	Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+	Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+	X-Permitted-Cross-Domain-Policies "none"
+}
+
+# Management/telemetry endpoints and common infrastructure-scouting paths are
+# never reachable from the public edge, whatever their shape. The bare /actuator
+# index is closed too: only /actuator/health* and /actuator/info* reach an app
+# socket, where ActuatorAccessFilter gates info behind an admin session. As the
+# first handle block (handle blocks are mutually exclusive), this runs before
+# both the API proxy and the SPA fallback.
+@closed path /actuator/metrics* /actuator/prometheus* /actuator/env* /actuator/beans* /actuator/configprops* /actuator/mappings* /actuator/loggers* /actuator/logfile* /actuator/heapdump* /actuator/threaddump* /actuator/shutdown* /actuator/refresh* /actuator/restart* /actuator /.git* /.env* /server-status* /wp-admin* /administrator*
+
+handle @closed {
+	respond 404
+}
+
+# Same-origin API surface: session cookies and the SPA share one origin, so the
+# HttpOnly neth_sid cookie never crosses sites.
+@api path /v1/* /actuator/*
+
+handle @api {
+	# Payload cap: nothing larger than a legitimate control-plane request body
+	# (login, agent registration, policy uploads). Oversize -> 413.
+	request_body {
+		max_size 4MB
+	}
+
+	# Caddy's reverse_proxy defaults overwrite X-Forwarded-Proto/Host and append
+	# X-Forwarded-For from the real TCP peer, so client-injected values are
+	# superseded; the app's RemoteIpValve trusts internal proxies only anyway.
+	reverse_proxy {$BACKEND_UPSTREAM:app:8080} {
+		# WS8: forward the edge-generated request identifier downstream so the app
+		# adopts it (validated inbound X-Correlation-Id) and echoes it back, joining
+		# edge + app + security-tier log lines for one request.
+		header_up X-Correlation-Id {http.request.uuid}
+
+		transport http {
+			dial_timeout 5s
+			read_timeout 60s
+			write_timeout 60s
+		}
+	}
+}
+
+# Static SPA with client-side history fallback.
+handle {
+	root * /srv
+	try_files {path} /index.html
+	file_server
+}

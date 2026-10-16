@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WS8 structured logging.
+
+  Two mutually exclusive console configurations:
+    - profile "structured" (production: SPRING_PROFILES_ACTIVE=structured set in
+      docker-compose) emits one sanitized JSON object per line via SafeJsonLayout,
+      including the MDC requestId set by CorrelationIdFilter.
+    - every other profile (the "plain" default and "test") emits the human-readable
+      pattern with %X{requestId:-} so an absent correlation id renders as empty.
+-->
+<configuration>
+
+    <springProfile name="structured">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+                <layout class="io.netherite.observability.SafeJsonLayout"/>
+            </encoder>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="!structured">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%date{ISO8601} %-5level [%thread] %X{requestId:-} %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+</configuration>

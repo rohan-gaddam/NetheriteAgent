@@ -1,0 +1,16 @@
+**/target/
+*.log
+**/secrets/
+infrastructure/docker/secrets/
+.env
+**/.env
+**/.env.*
+**/policies-data/
+**/maven-cp.txt
+*.dump
+**/_p3tmp/
+**/.p3tmp/
+**/backups/
+# Safe templates stay included:
+!**/.env.example
+!**/secrets.example/

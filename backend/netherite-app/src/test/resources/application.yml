@@ -1,0 +1,75 @@
+server:
+  port: 0
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  application:
+    name: netherite-agent-control-plane-test
+
+  datasource:
+    url: jdbc:h2:mem:netheritedb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    username: sa
+    password: 
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: false
+
+  data:
+    redis:
+      repositories:
+        enabled: false
+
+netherite:
+  environment: test
+  distributed:
+    provider: memory
+  rate-limit:
+    enabled: true
+    # Default test context: the limiter is live but the route table is empty, so existing
+    # suites (OwnerAuthenticationTest performs ~33 logins, approval/execution flows loop)
+    # are never throttled. Focused verification suites opt into tight limits via the
+    # 'ratelimit' profile (src/test/resources/application-ratelimit.yml).
+    routes: []
+  opa:
+    url: http://localhost:8181
+    policy-path: /v1/data/netherite/authz/evaluation_output
+    timeout-ms: 200
+  llm:
+    provider: none
+  auth:
+    owner:
+      # Test fixture BCrypt hash for a disposable test-only password (see
+      # OwnerAuthenticationTest OWNER_PASSWORD), pinned here so the
+      # test profile is self-contained. The PRODUCTION application.yml has NO baked
+      # hash: OWNER_PASSWORD_HASH must come from the container secret mechanism.
+      email: ${OWNER_EMAIL:owner@example.com}
+      password-hash: $2b$10$C9A8I18DD6SzKhOnjxE49.beH6hGJjswSSeS5ci3AlfNGkkqfkzuy
+      organization-name: NetheriteAgent Test
+      organization-slug: netherite-test
+  security:
+    ssrf-guard:
+      enabled: true
+      blocked-cidrs:
+        - 127.0.0.0/8
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 169.254.169.254/32
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always

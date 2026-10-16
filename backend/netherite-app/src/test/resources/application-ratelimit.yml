@@ -1,0 +1,53 @@
+netherite:
+  rate-limit:
+    enabled: true
+    default-on-redis-error: fail-open
+    dependency:
+      connect-timeout-millis: 200
+      timeout-millis: 200
+      retry-attempts: 0
+      circuit-break-failures: 3
+      circuit-break-open-millis: 1500
+    # Focused verification profile: tight limits prove the pre-auth and identity tiers
+    # reject floods with 429/503 and that limits are per-identity/per-tenant.
+    routes:
+      - name: test-login
+        methods: [POST]
+        path: /v1/auth/login
+        fail-closed: true
+        buckets:
+          - { dimension: IP, limit: 3, window-seconds: 60 }
+          - { dimension: LOGIN_ACCOUNT_IP, limit: 2, window-seconds: 60 }
+          - { dimension: LOGIN_ACCOUNT, limit: 4, window-seconds: 60 }
+      - name: test-oidc
+        path: /v1/auth/oidc/**
+        fail-closed: true
+        buckets:
+          - { dimension: IP, limit: 2, window-seconds: 60 }
+      - name: test-agent-key
+        methods: [POST]
+        path: /v1/actions/**
+        fail-closed: true
+        buckets:
+          - { dimension: AGENT_KEY_IDENTIFIER, limit: 2, window-seconds: 60 }
+      - name: test-short-window
+        methods: [GET]
+        path: /v1/auth/me
+        buckets:
+          - { dimension: IP, limit: 3, window-seconds: 1 }
+      - name: test-user-surface
+        path: /v1/dashboard/**
+        buckets:
+          - { dimension: USER, limit: 2, window-seconds: 60 }
+          - { dimension: ORGANIZATION, limit: 5, window-seconds: 60 }
+      - name: test-fail-closed-route
+        methods: [POST]
+        path: /v1/policies/**
+        fail-closed: true
+        buckets:
+          - { dimension: USER, limit: 2, window-seconds: 60 }
+      - name: test-fail-open-route
+        methods: [GET]
+        path: /v1/audit/**
+        buckets:
+          - { dimension: USER, limit: 2, window-seconds: 60 }

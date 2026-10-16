@@ -1,0 +1,49 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+
+  datasource:
+    url: jdbc:h2:mem:netheritedb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: false
+
+  data:
+    redis:
+      repositories:
+        enabled: false
+
+netherite:
+  environment: test
+  opa:
+    url: http://localhost:8181
+    policy-path: /v1/data/netherite/base
+    timeout-ms: 200
+  llm:
+    provider: none
+  auth:
+    owner:
+      email: owner@example.com
+      password-hash: $2b$10$C9A8I18DD6SzKhOnjxE49.beH6hGJjswSSeS5ci3AlfNGkkqfkzuy
+      organization-name: NetheriteAgent Test
+      organization-slug: netherite-test
+    oidc:
+      enabled: true
+      callback-base-url: http://localhost:3000
+      external-base-url: http://localhost:8080
+      flow-timeout-seconds: 300
+    session:
+      cookie-name: neth_sid
+      cookie-secure: ""
+      cookie-same-site: Lax
+      ttl-seconds: 86400

@@ -1,0 +1,397 @@
+# NetheriteAgent production deployment (Docker Compose).
+#
+# Topology:
+#   [browser/agent] --HTTPS--> frontend (Caddy edge, published 80/443)
+#                                   |-- /v1/*, /actuator/* --> app (N backend replicas)
+#                                   |-- /* (SPA)           --> /srv (static dist)
+#   app --> postgres (internal only, Flyway V1..V13 via the one-shot migrate service)
+#   app --> redis    (internal only, AOF persistence, password protected)
+#   app --> opa      (internal only, fail-closed policy engine, pinned image)
+#
+# Secrets are delivered as file-based docker compose secrets (mounted under
+# /run/secrets/...). There is NO .env interpolation of secret values anywhere:
+# Compose would re-interpret the '$' characters inside a BCrypt hash, so the
+# OWNER_PASSWORD_HASH (and all passwords) travel from host files into the
+# containers verbatim. Each container image copies its secrets to environment
+# variables via the app-entrypoint (see backend/netherite-app/docker-entrypoint.sh);
+# PostgreSQL consumes its own via POSTGRES_PASSWORD_FILE; Redis reads the file
+# inside its command. A missing secret file makes `docker compose up` abort
+# before the service starts (fail fast). No secret is baked into an image, shown
+# by `docker compose config`, or emitted to logs/health/metrics.
+#
+# Provisioning (never commit the real files; passwords are never passed on a
+# command line - the generators read OWNER_PASSWORD from the environment or a
+# hidden prompt):
+#   $env:OWNER_PASSWORD = '<owner-login-password>'  ; .\scripts\generate-secrets.ps1
+#   git-ignored target: ./secrets/db_password, ./secrets/db_app_password,
+#                       ./secrets/redis_password, ./secrets/opa_policy_token,
+#                       ./secrets/owner_password_hash,
+#                       ./secrets/gemini_api_key (EMPTY unless LLM_PROVIDER=gemini),
+#                       ./secrets/openrouter_api_key (EMPTY unless LLM_PROVIDER=openrouter)
+#   The gemini_api_key / openrouter_api_key source files are always required by
+#   `docker compose up` (they are declared below), but the app only reads the
+#   one matching .env LLM_PROVIDER: `docker compose up` with the default
+#   provider=none runs fine with empty files, and a selected provider with an
+#   empty/missing key fails closed in the app entrypoint.
+#
+# OPA security model (Batch E):
+#   - The engine runs --authentication=token --authorization=basic. Its
+#     authorization decision (system.authz, mounted from opa/policies/system/)
+#     admits exactly the bearer token in data.opa_admin_tokens.tokens, which
+#     opa-entrypoint.sh materializes from the opa_policy_token secret into
+#     authz_tokens.json on a container-local tmpfs (/policies-data). The token
+#     document never touches the host or repository filesystem. Unauthorized
+#     callers get 401.
+#   - The app authenticates on every decision, health and policy-push call with
+#     the same token (delivered via OPA_TOKEN by docker-entrypoint.sh).
+#   - opa-entrypoint.sh is made executable via the compose `entrypoint:` (the
+#     audience/"opa run" image entrypoint is bypassed so the entrypoint can
+#     write the authz token data before OPA boots).
+#
+# Usage:
+#   docker compose build            # build app + frontend images
+#   docker compose run --rm migrate # THE single migration process (applies V1..V13)
+#   docker compose up -d --scale app=2
+#
+# The app service boots with FLYWAY_ENABLED=false: only the migrate service
+# ever runs Flyway, satisfying the single-migrator-per-deployment requirement.
+
+name: netherite
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  db_app_password:
+    file: ./secrets/db_app_password
+  redis_password:
+    file: ./secrets/redis_password
+  opa_policy_token:
+    file: ./secrets/opa_policy_token
+  owner_password_hash:
+    file: ./secrets/owner_password_hash
+  gemini_api_key:
+    file: ./secrets/gemini_api_key
+  openrouter_api_key:
+    file: ./secrets/openrouter_api_key
+
+
+# WS8: bounded json-file log retention/size for every service â€” at most 3 files of
+# 50MB each per container, so no single container can grow logs without bound.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  postgres:
+    # WS7: digest-pinned to the exact linux/amd64 manifest recorded locally
+    # (postgres:16-alpine, 2026-10-06). Re-resolve when bumping the image
+    # (docker pull postgres:16-alpine && docker image inspect --format '{{index
+    # .RepoDigests 0}}' postgres:16-alpine) or when deploying to a non-amd64 host.
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-netherite}
+      POSTGRES_USER: ${DB_USER:-netherite_admin}
+      # postgres:*-alpine natively supports <VAR>_FILE secrets.
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+      - db_app_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./postgres/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    networks: [netherite_net]
+    logging: *default-logging
+    # Runtime hardening: read-only rootfs (only the pgdata volume and the socket
+    # dir are writable), no Linux capabilities beyond the minimum PostgreSQL's
+    # entrypoint actually needs (it must chown/chmod the volume's permission fix
+    # and switch UID via its gosu drop), no privilege elevation, PID-1 init.
+    # The runtime postgres daemon itself runs as the unprivileged postgres user.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /var/run/postgresql:size=8m
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-netherite_admin} -d ${DB_NAME:-netherite}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+
+  redis:
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    restart: unless-stopped
+    # AOF on every second write; coordination keys (locks/idempotency) live here,
+    # so persistence is required and eviction of coordination state is forbidden.
+    # The requirepass secret is read from the mounted file â€” '$$' escapes to a
+    # single '$' for Compose, and the container shell substitutes $(cat ...) at
+    # runtime. The official redis image has no *_FILE variable, hence this form.
+    command:
+      - sh
+      - -c
+      - redis-server --appendonly yes --appendfsync everysec --save 60 1000 --maxmemory 256mb --maxmemory-policy noeviction --requirepass "$$(cat /run/secrets/redis_password)"
+    secrets:
+      - redis_password
+    volumes:
+      - redisdata:/data
+    networks: [netherite_net]
+    logging: *default-logging
+    # Runtime hardening: the official redis image's default identity is root, so
+    # the container explicitly runs as redis (999:1000); /data is already owned
+    # by redis in-image (named volumes inherit that ownership). Read-only rootfs,
+    # no caps, no elevation, PID-1 init.
+    user: "999:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping 2>/dev/null | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+  # OPA is intentionally internal-only: never exposed to a public interface.
+  # The app fails closed (503, never ALLOW) when OPA is unreachable.
+  # -debug variant: identical OPA 0.68.0 build, non-root (1000:1000), and ships
+  # busybox wget so the healthcheck below can actually execute.
+  # Bearer authorization: engine enforces system.authz (token). The healthcheck
+  # must authenticate too â€” OPA 0.68 returns 401 on /health without a token.
+  opa:
+    image: openpolicyagent/opa:0.68.0-debug@sha256:3b451aebbbd3bfd9833517d50e12b35f4244a5e45ea5b0ce0515ca309a910216
+    restart: unless-stopped
+    entrypoint: ["/opa-entrypoint.sh"]
+    volumes:
+      - ./opa/opa-entrypoint.sh:/opa-entrypoint.sh:ro
+      - ./opa/policies:/policies:ro
+      # No host bind mount for the authz-token data: opa-entrypoint.sh writes
+      # authz_tokens.json into the container-local tmpfs /policies-data, so the
+      # runtime token never appears on the host or in the repository tree.
+    secrets:
+      - opa_policy_token
+    networks: [netherite_net]
+    logging: *default-logging
+    # Runtime hardening: read-only rootfs with only /policies-data (secret-token
+    # materialization as tmpfs) writable, no caps, no elevation, PID-1 init.
+    # OPA already runs as its own unprivileged uid 1000:1000 (image), so the
+    # tmpfs is owned by uid 1000 to let opa-entrypoint.sh write the token data.
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+      - /policies-data:size=4m,uid=1000,gid=1000,mode=0700
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --header=\"Authorization: Bearer $$(cat /run/secrets/opa_policy_token)\" http://localhost:8181/health >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  # One-shot single migration process. Replicas depend on its success and boot
+  # with FLYWAY_ENABLED=false so Flyway only ever runs in this one container.
+  migrate:
+    image: netherite-agent-app:0.1.0
+    build:
+      context: ../../backend
+      dockerfile: netherite-app/Dockerfile
+    command: ["--netherite.migrate-only=true"]
+    restart: "no"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME:-netherite}
+      DB_USER: ${DB_USER:-netherite_admin}
+      # migrate runs Flyway as the superuser: DDL, triggers and grant statements
+      # demand ownership. The runtime app must never hold these credentials.
+      DB_SECRET_NAME: db_password
+      FLYWAY_ENABLED: "true"
+      # WS8: migrate emits the same structured JSON logs as the app.
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-structured}
+    secrets:
+      - db_password
+      - redis_password
+      - owner_password_hash
+      - opa_policy_token
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [netherite_net]
+    logging: *default-logging
+    # Runtime hardening: read-only rootfs (JDK only needs a writable /tmp),
+    # no caps, no elevation, PID-1 init. The one-shot Flyway process.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    init: true
+
+  app:
+    image: netherite-agent-app:0.1.0
+    build:
+      context: ../../backend
+      dockerfile: netherite-app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8080"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME:-netherite}
+      # Runtime RDBMS identity is the least-privileged app role, not the admin.
+      # netherite_app (created by postgres/init-db.sh) holds SELECT/INSERT only on
+      # business tables and cannot UPDATE/DELETE audit_logs; the append-only
+      # trigger additionally rejects such statements for any role.
+      DB_USER: netherite_app
+      DB_SECRET_NAME: db_app_password
+      FLYWAY_ENABLED: "false"           # migrations run only in the migrate service
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      OPA_URL: http://opa:8181
+      
+      LLM_PROVIDER: ${LLM_PROVIDER:-none}
+      GEMINI_MODEL: ${GEMINI_MODEL}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL}
+
+
+      OPA_TIMEOUT_MS: ${OPA_TIMEOUT_MS:-1000}
+      # Push enabled in production: activation first synchronizes the version into
+      # the engine, and the startup reconciliation keeps the base module tracked.
+      OPA_POLICY_PUSH_ENABLED: ${OPA_POLICY_PUSH_ENABLED:-true}
+      DISTRIBUTED_PROVIDER: redis
+      NETHERITE_ENV: ${NETHERITE_ENV:-production}
+      OWNER_EMAIL: ${OWNER_EMAIL}
+      OWNER_ORG_NAME: ${OWNER_ORG_NAME:-NetheriteAgent}
+      OWNER_ORG_SLUG: ${OWNER_ORG_SLUG:-netherite}
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_CALLBACK_BASE_URL: ${OIDC_CALLBACK_BASE_URL:-}
+      OIDC_EXTERNAL_BASE_URL: ${OIDC_EXTERNAL_BASE_URL:-}
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-true}"
+      SHUTDOWN_TIMEOUT_SECONDS: ${SHUTDOWN_TIMEOUT_SECONDS:-30}
+      LOGGING_LEVEL_IO_NETHERITE_STATE: ${LOG_LEVEL_STATE:-INFO}
+      # WS8: production emits one JSON structured log line per event.
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-structured}
+    secrets:
+      - db_app_password
+      - redis_password
+      - owner_password_hash
+      - opa_policy_token
+      - gemini_api_key
+      - openrouter_api_key
+    networks: [netherite_net]
+    # Runtime hardening: read-only rootfs (JVM needs only a writable /tmp), no
+    # Linux capabilities, no privilege elevation, PID-1 init. The app image
+    # already runs as uid 10001.
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    healthcheck:
+      # Liveness stays up while fail-closed dependencies are down; the edge
+      # consumes Spring's readiness endpoint at /actuator/health/readiness.
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/actuator/health/liveness >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+
+  # The only published services: Caddy terminates TLS and load-balances /v1 and
+  # /actuator across every replica of the app service (round-robin via DNS).
+  frontend:
+    image: netherite-frontend:0.1.0
+    build:
+      context: ../..
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+      BACKEND_UPSTREAM: ${BACKEND_UPSTREAM:-app:8080}
+      # Caddy defaults its storage to XDG_DATA_HOME/XDG_CONFIG_HOME (/data and
+      # /config in the official image). Under the hardened read-only+tmpfs set,
+      # those are root-owned, so state (local CA/certs, autosave) is redirected
+      # into the world-writable /tmp tmpfs owned by the running identity.
+      XDG_DATA_HOME: /tmp/caddy-data
+      XDG_CONFIG_HOME: /tmp/caddy-config
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    networks: [netherite_net]
+    logging: *default-logging
+    # Runtime hardening: read-only rootfs with Caddy runtime state under tmpfs
+    # (ephemeral â€” the local CA/certs regenerate on every boot, which is fine for
+    # this single-instance edge and avoids persisting any key material); explicit
+    # non-root edge identity (caddy user, uid 10001); no caps, no elevation, PID-1
+    # init.
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    healthcheck:
+      # Over the actual TLS listener (curl -k trusts the ephemeral local CA).
+      test: ["CMD-SHELL", "curl -fsSk https://localhost/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+networks:
+  netherite_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,146 @@
+# NetheriteAgent — CD deployment template (WS7).
+#
+# THIS IS A TEMPLATE. It is never triggered by push/PR and has NOT been
+# executed in this repository (no production host is attached). CI-side image
+# build validation happens in ci.yml; this workflow is the deployment-ready
+# path a production operator wires to a self-hosted runner reachable by docker.
+#
+# Requirements before first use (documented in docs/production-deployment.md §26):
+#   - a self-hosted GitHub Actions runner labeled `production` ON the deploy host,
+#   - an Environment named `production` with
+#        secrets: DB_PASSWORD, DB_APP_PASSWORD, REDIS_PASSWORD,
+#                 OPA_POLICY_TOKEN, OWNER_PASSWORD_HASH
+#        and optionally GEMINI_API_KEY (only required when the host .env sets
+#        LLM_PROVIDER=gemini; the default LLM_PROVIDER=none runs without it and
+#        provisions an empty gemini_api_key file instead),
+#        and optionally OPENROUTER_API_KEY (only required when the host .env
+#        sets LLM_PROVIDER=openrouter; otherwise an empty openrouter_api_key
+#        file is provisioned instead),
+#        and non-secret variables + a pre-configured `infrastructure/docker/.env`
+#        (non-secret config copied from .env.example by the operator),
+#   - required reviewers on the environment (operator decision gate).
+#
+# Secret handling enforced here:
+#   - Secrets are referenced ONLY through GitHub Environments secrets and written
+#     to the git-ignored ./secrets/* files with umask 0177. They are never echoed
+#     (no `set -x`), never passed as compose/docker build args, never written to
+#     artifacts, and no secret value is used in any `docker build` (the images
+#     carry no secrets by design - they enter containers via /run/secrets at run
+#     time).
+#   - gemini_api_key is always materialized (so `docker compose up` resolves the
+#     declared file), but a real value is only copied from GEMINI_API_KEY when the
+#     operator supplies it. Missing/empty is fine for LLM_PROVIDER=none (default);
+#     when the host .env explicitly requests LLM_PROVIDER=gemini, a missing or
+#     empty GEMINI_API_KEY fails the deployment before any image is built (the
+#     app entrypoint would also fail closed at boot). openrouter_api_key follows
+#     the identical contract with OPENROUTER_API_KEY / LLM_PROVIDER=openrouter.
+
+name: CD - Deploy (template)
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_replicas:
+        description: Number of app replicas to run
+        required: false
+        default: '2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy control plane to production host
+    runs-on: [self-hosted, production]
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Non-secret configuration is expected to exist on the host already
+      # (cp infrastructure/docker/.env.example infrastructure/docker/.env, then
+      # edit SITE_ADDRESS/OWNER_EMAIL...). Refuse to deploy without it.
+      - name: Verify .env is present
+        working-directory: infrastructure/docker
+        run: |
+          test -f .env || { echo "::error::missing infrastructure/docker/.env (copy .env.example and configure non-secret values)"; exit 1; }
+
+      - name: Provision secret files from environment secrets
+        env:
+          DB_PW:       ${{ secrets.DB_PASSWORD }}
+          DB_APP_PW:   ${{ secrets.DB_APP_PASSWORD }}
+          REDIS_PW:    ${{ secrets.REDIS_PASSWORD }}
+          OPA_TOKEN:   ${{ secrets.OPA_POLICY_TOKEN }}
+          OWNER_HASH:  ${{ secrets.OWNER_PASSWORD_HASH }}
+          GEMINI_KEY:  ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 0177
+          mkdir -p infrastructure/docker/secrets
+          printf '%s' "$DB_PW"      > infrastructure/docker/secrets/db_password
+          printf '%s' "$DB_APP_PW"  > infrastructure/docker/secrets/db_app_password
+          printf '%s' "$REDIS_PW"   > infrastructure/docker/secrets/redis_password
+          printf '%s' "$OPA_TOKEN"  > infrastructure/docker/secrets/opa_policy_token
+          printf '%s' "$OWNER_HASH" > infrastructure/docker/secrets/owner_password_hash
+          # Fail closed when the host explicitly requests Gemini but no key was
+          # supplied to the Environment. Otherwise provision the file (the
+          # default empty file is valid for LLM_PROVIDER=none; the app entrypoint
+          # only reads gemini_api_key when LLM_PROVIDER=gemini).
+          LLM_PROVIDER_HOST="$(grep '^LLM_PROVIDER=' infrastructure/docker/.env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '"' | tr -d '[:space:]' || true)"
+          if [ -z "${GEMINI_KEY:-}" ]; then
+            if [ "$LLM_PROVIDER_HOST" = "gemini" ]; then
+              echo "::error::host .env sets LLM_PROVIDER=gemini but the GEMINI_API_KEY environment secret is missing or empty"
+              exit 1
+            fi
+            printf '%s' '' > infrastructure/docker/secrets/gemini_api_key
+          else
+            printf '%s' "$GEMINI_KEY" > infrastructure/docker/secrets/gemini_api_key
+          fi
+          if [ -z "${OPENROUTER_KEY:-}" ]; then
+            if [ "$LLM_PROVIDER_HOST" = "openrouter" ]; then
+              echo "::error::host .env sets LLM_PROVIDER=openrouter but the OPENROUTER_API_KEY environment secret is missing or empty"
+              exit 1
+            fi
+            printf '%s' '' > infrastructure/docker/secrets/openrouter_api_key
+          else
+            printf '%s' "$OPENROUTER_KEY" > infrastructure/docker/secrets/openrouter_api_key
+          fi
+          chmod 600 infrastructure/docker/secrets/*
+
+      - name: Build production images
+        working-directory: infrastructure/docker
+        run: docker compose build
+
+      - name: Apply database migrations (single migrator)
+        working-directory: infrastructure/docker
+        run: docker compose run --rm migrate
+
+      - name: Deploy replicas
+        working-directory: infrastructure/docker
+        env:
+          APP_REPLICAS: ${{ inputs.app_replicas }}
+        run: docker compose up -d --scale "app=${APP_REPLICAS}"
+
+      - name: Health verification (readiness UP through the edge)
+        working-directory: infrastructure/docker
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsSk "https://localhost/actuator/health/readiness" >/dev/null 2>&1; then
+              echo "READY"
+              docker compose ps
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::readiness did not become UP within 300s"
+          docker compose ps
+          exit 1
+
+      - name: Rollback note (documented in production-deployment.md §22)
+        run: |
+          echo "Rollback = redeploy previous image tag; schema rollback is restore-only (no down-migrations)."

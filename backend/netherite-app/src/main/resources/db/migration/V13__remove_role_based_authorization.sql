@@ -1,0 +1,33 @@
+-- ============================================================================
+-- V13: Remove role-based authorization (WS6)
+--
+-- Replaces the role column with the single designated authorized person model
+-- introduced in V12. This is the schema half of removing RBAC entirely.
+--
+-- V12 added organizations.authorized_person_user_id, which is now the ONLY
+-- source of organizational authorization. The `users.role` column is no longer
+-- read by any code path: authorization is decided by comparing the
+-- authenticated identity against the organization's designated person
+-- (see OrganizationAuthorizationService).
+--
+-- Why drop the column rather than leave it unused:
+--   1. A NOT NULL column that no longer grants anything is a correctness trap.
+--      It invites a future maintainer to wire it back into an authorization
+--      check and re-create the very RBAC model WS6 removes.
+--   2. User provisioning (SSO and owner bootstrap) previously had to invent a
+--      role for every user. With no role, provisioning stops fabricating
+--      privileges that were never granted.
+--   3. Keeping it would preserve a misleading claim in every API response that
+--      a user "has" a role implying authority they may not have.
+--
+-- `role VARCHAR(50) NOT NULL` is dropped with its implicit NOT NULL constraint;
+-- no dependent constraints, indexes or views reference it (verified: no
+-- user_roles join table exists anywhere in the schema).
+--
+-- Ordering: this runs after V12 because V12's composite foreign key targets
+-- users(id, organization_id), which is unaffected by dropping `role`.
+-- V1..V8 remain frozen; V12 is additive and lands first.
+-- ============================================================================
+
+ALTER TABLE users
+    DROP COLUMN IF EXISTS role;

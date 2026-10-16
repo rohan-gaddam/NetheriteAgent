@@ -1,0 +1,50 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:netherite_verify}
+    username: ${DB_USER:netherite_admin}
+    # Harness-only default: local/container PostgreSQL used by the pgverify ITs.
+    password: ${DB_PASSWORD:netherite_pw}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration,classpath:db/postgresql
+
+  data:
+    redis:
+      repositories:
+        enabled: false
+
+netherite:
+  environment: test
+  distributed:
+    provider: memory
+  opa:
+    url: http://localhost:8181
+    policy-path: /v1/data/netherite/authz/evaluation_output
+    timeout-ms: 200
+  llm:
+    provider: none
+  auth:
+    owner:
+      email: owner@example.com
+      password-hash: $2b$10$C9A8I18DD6SzKhOnjxE49.beH6hGJjswSSeS5ci3AlfNGkkqfkzuy
+      organization-name: NetheriteAgent Test
+      organization-slug: netherite-test
+    session:
+      cookie-name: neth_sid
+      cookie-secure: ""
+      cookie-same-site: Lax
+      ttl-seconds: 86400

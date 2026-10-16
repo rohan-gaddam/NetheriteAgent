@@ -1,0 +1,372 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+/* ---------------------------------------------------------------------------
+ * NetheriteAgent luminous deep-space atmosphere.
+ * Near-black indigo base; a strong electric-blue nebula upper-left, a violet
+ * nebula lower-right, a faint cyan horizon band low on the page, a dense
+ * starfield, and a vignette for cinematic depth. All layers are static.
+ * ------------------------------------------------------------------------- */
+body {
+  margin: 0;
+  font-family: 'InterVariable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background-color: #020207;
+  background-image:
+    radial-gradient(1150px 760px at 94% 26%, rgba(37, 99, 235, 0.34), transparent 62%),
+    radial-gradient(760px 560px at 4% 58%, rgba(139, 92, 246, 0.17), transparent 60%),
+    radial-gradient(560px 380px at 2% 52%, rgba(217, 70, 239, 0.08), transparent 60%),
+    radial-gradient(980px 300px at 52% 118%, rgba(34, 211, 238, 0.13), transparent 65%),
+    radial-gradient(700px 380px at 16% -12%, rgba(34, 211, 238, 0.12), transparent 60%),
+    radial-gradient(1.3px 1.3px at 4% 16%, rgba(186, 230, 253, 0.65), transparent 100%),
+    radial-gradient(1px 1px at 11% 46%, rgba(186, 230, 253, 0.45), transparent 100%),
+    radial-gradient(1.6px 1.6px at 18% 7%, rgba(255, 255, 255, 0.6), transparent 100%),
+    radial-gradient(1px 1px at 24% 74%, rgba(186, 230, 253, 0.45), transparent 100%),
+    radial-gradient(1.2px 1.2px at 31% 26%, rgba(221, 214, 254, 0.5), transparent 100%),
+    radial-gradient(1px 1px at 39% 54%, rgba(186, 230, 253, 0.4), transparent 100%),
+    radial-gradient(1.5px 1.5px at 45% 9%, rgba(255, 255, 255, 0.55), transparent 100%),
+    radial-gradient(1px 1px at 52% 88%, rgba(186, 230, 253, 0.38), transparent 100%),
+    radial-gradient(1.2px 1.2px at 58% 36%, rgba(221, 214, 254, 0.46), transparent 100%),
+    radial-gradient(1px 1px at 64% 62%, rgba(186, 230, 253, 0.42), transparent 100%),
+    radial-gradient(1.7px 1.7px at 70% 12%, rgba(255, 255, 255, 0.55), transparent 100%),
+    radial-gradient(1px 1px at 76% 82%, rgba(186, 230, 253, 0.38), transparent 100%),
+    radial-gradient(1.2px 1.2px at 82% 46%, rgba(221, 214, 254, 0.44), transparent 100%),
+    radial-gradient(1px 1px at 88% 22%, rgba(186, 230, 253, 0.5), transparent 100%),
+    radial-gradient(1.4px 1.4px at 93% 64%, rgba(255, 255, 255, 0.48), transparent 100%),
+    radial-gradient(1px 1px at 96% 88%, rgba(186, 230, 253, 0.36), transparent 100%),
+    radial-gradient(1px 1px at 7% 90%, rgba(186, 230, 253, 0.34), transparent 100%),
+    radial-gradient(130% 95% at 50% 42%, transparent 50%, rgba(0, 0, 0, 0.62) 100%);
+  background-attachment: fixed;
+}
+
+/* Full-viewport gradient hairline echoing the reference nav divider. */
+.rule-luminous {
+  background: linear-gradient(90deg, transparent 2%, rgba(217, 70, 239, 0.55) 22%, rgba(34, 211, 238, 0.7) 50%, rgba(59, 130, 246, 0.55) 78%, transparent 98%);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+}
+
+@layer components {
+  /* Primary glass surface: layered translucent indigo-blue, strong blur,
+   * luminous cyan rim, bright top-edge highlight and faint bottom inner glow. */
+  .glass-panel {
+    background: linear-gradient(165deg, rgba(48, 92, 200, 0.22), rgba(12, 22, 58, 0.62) 52%, rgba(12, 8, 36, 0.66));
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+    border: 1px solid rgba(103, 232, 249, 0.22);
+    box-shadow: 0 24px 70px -24px rgba(0, 0, 0, 0.85), 0 0 44px -16px rgba(34, 211, 238, 0.3),
+      inset 0 1px 0 0 rgba(186, 232, 253, 0.2), inset 0 -1px 0 0 rgba(34, 211, 238, 0.06);
+  }
+
+  /* Featured glass (login card, dialogs, hero panels): deeper glow. */
+  .panel-featured {
+    background: linear-gradient(165deg, rgba(56, 110, 220, 0.26), rgba(13, 24, 64, 0.66) 52%, rgba(14, 10, 40, 0.7));
+    -webkit-backdrop-filter: blur(22px);
+    backdrop-filter: blur(22px);
+    border: 1px solid rgba(103, 232, 249, 0.32);
+    box-shadow: 0 28px 80px -24px rgba(0, 0, 0, 0.9), 0 0 60px -14px rgba(34, 211, 238, 0.42),
+      0 0 110px -30px rgba(99, 102, 241, 0.4),
+      inset 0 1px 0 0 rgba(186, 232, 253, 0.28), inset 0 -1px 0 0 rgba(34, 211, 238, 0.08);
+  }
+
+  /* Lighter glass for nested wells, dropdowns, and hover states. */
+  .glass-soft {
+    background: rgba(22, 42, 96, 0.38);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(103, 232, 249, 0.12);
+  }
+
+  /* Primary luminous action: cyan-to-blue gradient with real presence. */
+  .btn-luminous {
+    background-image: linear-gradient(100deg, #06b6d4 0%, #3b82f6 100%);
+    box-shadow: 0 0 20px -4px rgba(34, 211, 238, 0.55), 0 0 48px -12px rgba(59, 130, 246, 0.4),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.25);
+    transition: filter 200ms ease, box-shadow 200ms ease, transform 220ms ease;
+  }
+  .btn-luminous:hover:not(:disabled) {
+    filter: brightness(1.12);
+    transform: translateY(-1px);
+    box-shadow: 0 0 30px -4px rgba(34, 211, 238, 0.7), 0 0 70px -12px rgba(59, 130, 246, 0.55),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.28);
+  }
+  .btn-luminous:active:not(:disabled) {
+    filter: brightness(0.96);
+    transform: translateY(0);
+  }
+  .btn-luminous:disabled {
+    opacity: 0.5;
+    box-shadow: none;
+  }
+
+  /* Luminous display type: crisp glyphs with a controlled cyan aura. */
+  .text-glow {
+    color: #f0fdff;
+    text-shadow: 0 0 10px rgba(103, 232, 249, 0.55), 0 0 34px rgba(59, 130, 246, 0.35);
+  }
+  .text-glow-soft {
+    color: #eaf6ff;
+    text-shadow: 0 0 8px rgba(103, 232, 249, 0.35), 0 0 22px rgba(59, 130, 246, 0.22);
+  }
+
+  /* Gentle floating hover for genuinely interactive cards/rows: ~2px lift,
+   * brighter rim, expanded glow. Never applied to static containers. */
+  .float-hover {
+    transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease, background-color 220ms ease;
+  }
+  .float-hover:hover {
+    transform: translateY(-2px);
+    border-color: rgba(103, 232, 249, 0.35);
+    box-shadow: 0 26px 60px -20px rgba(0, 0, 0, 0.85), 0 0 52px -14px rgba(34, 211, 238, 0.45),
+      inset 0 1px 0 0 rgba(186, 232, 253, 0.24);
+  }
+  .float-hover:active {
+    transform: translateY(0);
+  }
+
+}
+
+/* Visible keyboard focus everywhere (mouse users see no change). */
+:focus-visible {
+  outline: 2px solid rgba(103, 232, 249, 0.85);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.35);
+  color: #fff;
+}
+
+/* Slim dark scrollbars that match the theme. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 130, 190, 0.45) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(56, 130, 190, 0.45);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Readable autofill on dark inputs. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #fff;
+  -webkit-box-shadow: 0 0 0 60px #0a1030 inset;
+  caret-color: #fff;
+}
+
+/* Solid fallback where backdrop-filter is unsupported (glass stays legible). */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-panel,
+  .panel-featured {
+    background: #0a1230;
+  }
+  .glass-soft {
+    background: #0c1533;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * First-entry loader (brand ring + indeterminate progress line) and the
+ * one-time visual reveal. Opacity-only motion: fixed dialogs, sticky nav and
+ * focus order are never disturbed. No percentages are fabricated: the line is
+ * an indeterminate shimmer shown only while auth readiness is unresolved.
+ * ------------------------------------------------------------------------- */
+.boot-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #020208;
+}
+.boot-loader-core {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.boot-ring {
+  position: relative;
+  width: 168px;
+  height: 168px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.boot-ring::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(from 200deg, rgba(34, 211, 238, 0.05), rgba(34, 211, 238, 0.9), rgba(99, 102, 241, 0.9), rgba(217, 70, 239, 0.55), rgba(34, 211, 238, 0.05));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 13px), #000 calc(100% - 12px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 13px), #000 calc(100% - 12px));
+  filter: blur(1px);
+}
+.boot-ring-spin {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(from 0deg, transparent 0deg, rgba(103, 232, 249, 0.9) 40deg, transparent 90deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 13px), #000 calc(100% - 12px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 13px), #000 calc(100% - 12px));
+  animation: boot-ring-spin 5s linear infinite;
+}
+@keyframes boot-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.boot-mark {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, rgba(34, 211, 238, 0.18), rgba(10, 18, 48, 0.85));
+  border: 1px solid rgba(103, 232, 249, 0.35);
+  box-shadow: 0 0 28px -4px rgba(34, 211, 238, 0.55), inset 0 1px 0 0 rgba(186, 232, 253, 0.25);
+}
+.boot-mark-icon {
+  width: 34px;
+  height: 34px;
+  color: #a5f3fc;
+}
+.boot-wordmark {
+  margin-top: 22px;
+  font-family: 'Quicksand', 'InterVariable', sans-serif;
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: 0.01em;
+  color: #f1f5f9;
+}
+.boot-wordmark span {
+  color: #67e8f9;
+}
+.boot-progress {
+  position: relative;
+  margin-top: 18px;
+  width: 208px;
+  height: 2px;
+  border-radius: 9999px;
+  background: rgba(103, 232, 249, 0.14);
+  overflow: hidden;
+}
+.boot-progress-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 72px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(103, 232, 249, 0.95), rgba(129, 140, 248, 0.9), transparent);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.8);
+  animation: boot-progress-sweep 1.5s ease-in-out infinite;
+}
+@keyframes boot-progress-sweep {
+  from {
+    transform: translateX(-80px);
+  }
+  to {
+    transform: translateX(216px);
+  }
+}
+
+/* One-time cinematic reveal (~2.8s). Visual only: opacity fades never move
+ * layout, trap focus, or block interaction; content is usable immediately. */
+.app-intro {
+  animation: app-intro-fade 1.4s ease-out both;
+}
+@keyframes app-intro-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.app-bloom {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+  background: radial-gradient(720px 460px at 50% 30%, rgba(34, 211, 238, 0.16), rgba(99, 102, 241, 0.1) 45%, transparent 70%);
+  opacity: 0;
+  animation: app-bloom 2.8s ease-out both;
+}
+@keyframes app-bloom {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Scroll-triggered entrance for content sections. Content renders visible by
+ * default; the pre-reveal state applies only when JS arms it. */
+.reveal {
+  opacity: 1;
+}
+.reveal-hidden {
+  opacity: 0;
+  transform: translateY(14px);
+}
+.reveal-hidden.reveal,
+.reveal {
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+/* Display typography: rounded geometric voice for brand and feature text. */
+.font-display {
+  letter-spacing: 0.005em;
+}
+
+/* No ambient animation exists in this theme; keep third-party motion respectful.
+ * Loader spin/sweep, intro and reveals collapse to their resting state. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .float-hover:hover {
+    transform: none;
+  }
+  .boot-ring-spin,
+  .boot-progress-sweep {
+    animation: none !important;
+  }
+  .app-intro,
+  .app-bloom {
+    animation: none !important;
+    opacity: 1;
+  }
+  .reveal-hidden {
+    opacity: 1;
+    transform: none;
+  }
+}
+

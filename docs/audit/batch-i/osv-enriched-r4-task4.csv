@@ -1,0 +1,5 @@
+﻿"Artifact","Version","ID","Aliases","Severity","Fixed","Summary"
+"org.apache.logging.log4j:log4j-api","2.24.3","GHSA-qv9r-c865-cp47","CVE-2026-49844","MODERATE","2.25.5","Apache Log4j API: Improper encoding of non-finite floating-point values during MapMessage JSON serialization"
+"org.apache.commons:commons-lang3","3.17.0","GHSA-j288-q9x7-2f5v","CVE-2025-48924","MODERATE","3.18.0","Apache Commons Lang is vulnerable to Uncontrolled Recursion when processing long inputs"
+"org.springframework:spring-webmvc","6.2.19","GHSA-j9f9-w8pj-32f8","CVE-2026-47890","CRITICAL","7.0.9","Spring Framework Server Sent Event stream corruption while rendering fragments"
+"org.springframework:spring-webmvc","6.2.19","GHSA-pc63-qcmh-9cmg","CVE-2026-47884","CRITICAL","7.0.9","Spring Framework Improper Path Limitation in XsltView"
