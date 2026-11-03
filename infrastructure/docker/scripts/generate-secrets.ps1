@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 <#
 .SYNOPSIS
     Provision the file-based docker compose secrets for NetheriteAgent production.
@@ -15,6 +15,9 @@ Writes six files under infrastructure/docker/secrets/ (git-ignored):
                                on every decision, health and policy-push call; the engine
                                admits exactly this token via its mounted data)
       - owner_password_hash  : BCrypt($10) of OWNER_PASSWORD via BcryptTool.java
+      - credential_encryption_key : random 32-byte AES key (Base64) for credential
+                               encryption at rest. Generated ONLY if the file does not
+                               already exist; an existing key is never overwritten.
       - gemini_api_key       : EMPTY by default. The compose file always declares this secret
       - openrouter_api_key   : EMPTY by default. The compose file always declares this secret
                                (its source file must exist for `docker compose up`), but the
@@ -77,6 +80,13 @@ function Get-RandomHex {
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
     ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
+}
+
+function Get-RandomBase64Key {
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    [Convert]::ToBase64String($bytes)
 }
 
 function Get-BcryptHash {
@@ -169,6 +179,16 @@ New-Item -ItemType Directory -Path $SecretsDir -Force | Out-Null
     # openrouter_api_key likewise: declared by compose, read only when
     # LLM_PROVIDER=openrouter. Empty is the correct default.
     Write-SecretFile -Path "$SecretsDir\openrouter_api_key" -Value ''
+    # credential_encryption_key: 32-byte AES key (Base64) for credential encryption at rest.
+    # CRITICAL: Generated ONLY if the file does not already exist. Never overwrite an existing
+    # key, as doing so permanently destroys access to all stored ciphertext.
+    $keyPath = "$SecretsDir\credential_encryption_key"
+    $keyStatus = "preserved existing key (never overwritten)"
+    if (-not (Test-Path -LiteralPath $keyPath)) {
+        $credentialKey = Get-RandomBase64Key
+        Write-SecretFile -Path $keyPath -Value $credentialKey
+        $keyStatus = "generated 32-byte AES key (Base64)"
+    }
 
     Write-Host ""
     Write-Host "Secrets provisioned (git-ignored, never committed):" -ForegroundColor Green
@@ -177,6 +197,7 @@ New-Item -ItemType Directory -Path $SecretsDir -Force | Out-Null
     Write-Host "  $SecretsDir\redis_password       ($($redisPassword.Length) hex chars)"
     Write-Host "  $SecretsDir\opa_policy_token     ($($opaPolicyToken.Length) hex chars, OPA bearer authorization)"
     Write-Host "  $SecretsDir\owner_password_hash  (BCrypt, verifies at login)"
+    Write-Host "  $SecretsDir\credential_encryption_key ($keyStatus)"
     Write-Host "  $SecretsDir\gemini_api_key       (EMPTY - add a real key only for LLM_PROVIDER=gemini)"
     Write-Host "  $SecretsDir\openrouter_api_key    (EMPTY - add a real key only for LLM_PROVIDER=openrouter)"
     Write-Host ""

@@ -10,8 +10,10 @@ import org.springframework.stereotype.Component;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * SSRF & DNS Egress Guard.
@@ -29,6 +31,15 @@ import java.util.List;
  * {@code netherite.security.ssrf-guard.allow-private-operator-configured=true}. The explicit
  * {@code blocked-cidrs} deny list is still enforced, and cloud-metadata, link-local, special
  * purpose and IPv6 special-use ranges remain blocked.</p>
+ *
+ * <p><b>Exact destination allowlist.</b> {@code allowed-private-destinations} is an
+ * operator-controlled list of exact {@code host:port} pairs (IPv6 entries use
+ * {@code [address]:port}). Only those exact pairs may reach a private/loopback/ULA address.
+ * The destination is still resolved and checked against the always-blocked link-local,
+ * metadata, multicast, documentation and explicit deny ranges, and the normal port policy
+ * still applies. A different hostname, a different port, or a hostname resolving to an
+ * unapproved private address remains blocked. CIDR entries are deliberately not accepted
+ * here: this setting is for exact destinations, not broad private network ranges.</p>
  */
 @Slf4j
 @Component
@@ -53,9 +64,14 @@ public class SsrfGuardValidatorImpl implements SsrfGuardValidator {
     private final List<CidrBlock> configuredBlockedRanges;
     private final List<Integer> blockedPorts;
     private final boolean allowPrivateOperatorConfigured;
+    private final List<AllowedDestination> allowedDestinations;
 
     public SsrfGuardValidatorImpl(List<String> blockedCidrs) {
-        this(blockedCidrs != null ? blockedCidrs : List.of(), DEFAULT_BLOCKED_PORTS, false);
+        this(blockedCidrs != null ? blockedCidrs : List.of(), DEFAULT_BLOCKED_PORTS, false, List.of());
+    }
+
+    public SsrfGuardValidatorImpl(List<String> blockedCidrs, List<Integer> blockedPorts, boolean allowPrivateOperatorConfigured) {
+        this(blockedCidrs, blockedPorts, allowPrivateOperatorConfigured, List.of());
     }
 
     @Autowired
@@ -63,27 +79,36 @@ public class SsrfGuardValidatorImpl implements SsrfGuardValidator {
             @Value("${netherite.security.ssrf-guard.blocked-cidrs:}") List<String> blockedCidrs,
             @Value("${netherite.security.ssrf-guard.blocked-ports:}") List<Integer> blockedPorts,
             @Value("${netherite.security.ssrf-guard.allow-private-operator-configured:false}")
-            boolean allowPrivateOperatorConfigured) {
+            boolean allowPrivateOperatorConfigured,
+            @Value("${netherite.security.ssrf-guard.allowed-private-destinations:}")
+            List<String> allowedPrivateDestinations) {
         this.configuredBlockedRanges = (blockedCidrs != null ? blockedCidrs : List.<String>of()).stream()
                 .map(CidrBlock::parse)
                 .toList();
         this.blockedPorts = (blockedPorts != null && !blockedPorts.isEmpty()) ? blockedPorts : DEFAULT_BLOCKED_PORTS;
         this.allowPrivateOperatorConfigured = allowPrivateOperatorConfigured;
-        log.info("SSRF guard initialized with {} configured deny ranges and {} blocked ports (operator-private-allowed={})",
-                configuredBlockedRanges.size(), this.blockedPorts.size(), allowPrivateOperatorConfigured);
+        this.allowedDestinations = parseAllowedDestinations(allowedPrivateDestinations);
+
+        log.info("SSRF guard initialized with {} configured deny ranges, {} blocked ports, {} exact allowed destinations (operator-private-allowed={})",
+                configuredBlockedRanges.size(), this.blockedPorts.size(), this.allowedDestinations.size(), allowPrivateOperatorConfigured);
     }
 
     @Override
     public boolean isUriPermitted(URI targetUri) {
-        return validateUri(targetUri, false);
+        return validateUri(targetUri, false, null);
+    }
+
+    @Override
+    public boolean isUriPermitted(URI targetUri, String resourceName) {
+        return validateUri(targetUri, false, resourceName);
     }
 
     @Override
     public boolean isUriPermittedForOperatorConfigured(URI targetUri) {
-        return validateUri(targetUri, allowPrivateOperatorConfigured);
+        return validateUri(targetUri, allowPrivateOperatorConfigured, null);
     }
 
-    private boolean validateUri(URI targetUri, boolean operatorRelaxed) {
+    private boolean validateUri(URI targetUri, boolean operatorRelaxed, String resourceName) {
         if (targetUri == null) {
             return false;
         }
@@ -113,9 +138,16 @@ public class SsrfGuardValidatorImpl implements SsrfGuardValidator {
         if (operatorRelaxed) {
             if (!validateResolvedAddresses(host, OPERATOR_AUTO_BLOCKED, "operator-configured"))
                 return false;
+        } else if (isExplicitlyAllowedDestination(targetUri)) {
+            // Exact host:port approved by the operator. Private/loopback/ULA addresses are
+            // permitted for this destination only; link-local, metadata, multicast,
+            // documentation and explicitly denied ranges still apply.
+            log.debug("SSRF guard permitting explicitly allowed destination {}:{}", host, effectivePort(targetUri));
+            if (!validateResolvedAddresses(host, OPERATOR_AUTO_BLOCKED, "explicitly allowed"))
+                return false;
         } else {
             // Block loopback by hostname before resolution
-            if ("127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host)) {
+            if (isLoopbackHost(host)) {
                 log.warn("SSRF guard rejecting loopback host: {}", host);
                 return false;
             }
@@ -124,6 +156,117 @@ public class SsrfGuardValidatorImpl implements SsrfGuardValidator {
         }
 
         return true;
+    }
+
+    private boolean isExplicitlyAllowedDestination(URI targetUri) {
+        String host = normalizeHost(targetUri.getHost());
+        int port = effectivePort(targetUri);
+        for (AllowedDestination destination : allowedDestinations) {
+            if (destination.port() == port && destination.host().equals(host)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int effectivePort(URI targetUri) {
+        int port = targetUri.getPort();
+        if (port > 0) {
+            return port;
+        }
+        return "https".equalsIgnoreCase(targetUri.getScheme()) ? 443 : 80;
+    }
+
+    private static boolean isLoopbackHost(String host) {
+        String normalized = normalizeHost(host);
+        return "127.0.0.1".equals(normalized) || "localhost".equals(normalized)
+                || "0:0:0:0:0:0:0:1".equals(normalized);
+    }
+
+    /**
+     * Parses exact {@code host:port} entries. CIDR entries are intentionally rejected here
+     * so this setting cannot accidentally become a broad private-network allowlist.
+     */
+    private static List<AllowedDestination> parseAllowedDestinations(List<String> entries) {
+        List<AllowedDestination> parsed = new ArrayList<>();
+        if (entries == null) {
+            return List.of();
+        }
+        for (String entry : entries) {
+            String value = entry == null ? "" : entry.trim();
+            if (value.isEmpty()) {
+                continue;
+            }
+            AllowedDestination destination = parseAllowedDestination(value);
+            if (destination == null) {
+                log.warn("Ignoring invalid SSRF allowed-private-destination entry (expected exact host:port): {}", value);
+                continue;
+            }
+            parsed.add(destination);
+        }
+        return List.copyOf(parsed);
+    }
+
+    private static AllowedDestination parseAllowedDestination(String value) {
+        if (value.contains("/")) {
+            return null;
+        }
+
+        String host;
+        String portPart;
+        if (value.startsWith("[")) {
+            int closingBracket = value.indexOf(']');
+            if (closingBracket <= 1 || closingBracket + 1 >= value.length()
+                    || value.charAt(closingBracket + 1) != ':') {
+                return null;
+            }
+            host = value.substring(1, closingBracket);
+            portPart = value.substring(closingBracket + 2);
+        } else {
+            int colon = value.lastIndexOf(':');
+            if (colon <= 0 || colon != value.indexOf(':')) {
+                return null;
+            }
+            host = value.substring(0, colon);
+            portPart = value.substring(colon + 1);
+        }
+
+        if (host.isBlank() || portPart.isBlank()) {
+            return null;
+        }
+
+        int port;
+        try {
+            port = Integer.parseInt(portPart);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (port < 1 || port > 65535) {
+            return null;
+        }
+
+        String normalizedHost = normalizeHost(host);
+        if (normalizedHost.isEmpty()) {
+            return null;
+        }
+        return new AllowedDestination(normalizedHost, port);
+    }
+
+    private static String normalizeHost(String host) {
+        if (host == null) {
+            return "";
+        }
+        String normalized = host.trim();
+        if (normalized.startsWith("[") && normalized.endsWith("]")) {
+            normalized = normalized.substring(1, normalized.length() - 1);
+        }
+        while (normalized.endsWith(".")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized.toLowerCase(Locale.ROOT);
+    }
+
+    private record AllowedDestination(String host, int port) {
     }
 
     /**

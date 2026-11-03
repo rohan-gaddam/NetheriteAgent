@@ -21,7 +21,7 @@ CD deployment template. The verification items of that workstream are recorded i
   process); serves REST (`/v1/*`) + Actuator (`/actuator/*`).
 - **frontend** — React SPA behind **Caddy 2.8** (TLS termination, `/v1`, `/actuator` proxied to
   `app`).
-- **postgres 16** — schema `netherite` (Flyway V1..V14, **additive only**; applied migrations
+- **postgres 16** — schema `netherite` (Flyway V1..V15, **additive only**; applied migrations
   are frozen by checksum and must never be edited).
 - **redis 7** — coordination only: locks, idempotency, leader heartbeats. AOF `everysec`,
   `noeviction`; state rebuildable (TTL-bounded).
@@ -53,7 +53,7 @@ can never be re-interpreted and a silently-empty secret can never boot the app.
                 │  internal     │        │  internal,    │  │  internal,  │
                 │               │        │  AOF + noevict│  │  pinned, ro │
                 └───────────────┘        └───────────────┘  └─────────────┘
-                schema V1..V14              coordination keys      policies
+                schema V1..V15              coordination keys      policies
                 (migrate one-shot)          (locks/idempotency)    (fail closed)
 ```
 
@@ -91,7 +91,7 @@ infrastructure/
     secrets/               # git-ignored, real secrets (see §7) — provisioned by scripts/
     secrets.example/       # committed example/phony values (never real)
     scripts/
-      generate-secrets.ps1 # Windows: writes the 5 file secrets (db/redis 64-hex + BCrypt owner hash)
+      generate-secrets.ps1 # Windows: writes the 7 file secrets (db/redis 64-hex, BCrypt owner hash, AES-256 key, etc.)
       generate-secrets.sh  # Linux/macOS equivalent
       verify-secret-handling.ps1 # P1..P13 automated proof suite (see §10)
     opa/policies/          # OPA rego (base.rego entry point); mounted read-only
@@ -145,11 +145,22 @@ enabling Gemini) and an **empty** `openrouter_api_key` (valid unless enabling Op
 | `secrets/owner_password_hash` | app `OWNER_PASSWORD_HASH` | Owner login BCrypt (`$2a$`/`$2b$`) |
 | `secrets/gemini_api_key` | app `GEMINI_API_KEY` (only read when `LLM_PROVIDER=gemini`) | Google Gemini interpretation (optional) |
 | `secrets/openrouter_api_key` | app `OPENROUTER_API_KEY` (only read when `LLM_PROVIDER=openrouter`) | OpenRouter chat-completions interpretation (optional) |
+| `secrets/credential_encryption_key` | app `CREDENTIAL_ENCRYPTION_KEY` | AES-256-GCM 32-byte Base64 key for encrypting resource credentials at rest |
 
 `gemini_api_key` / `openrouter_api_key` are special: `docker-compose.yml` always declares them (their source files must
 exist for `docker compose up`), but the app only reads the one matching `.env` `LLM_PROVIDER`.
 The default (`none`) runs without a real key — the files are simply empty;
 if the selected provider's key is missing/empty the app entrypoint aborts (fail closed).
+
+### Credential Encryption Key Lifecycle & Security
+
+`credential_encryption_key` holds a Base64-encoded 32-byte (256-bit) AES key consumed by `CredentialEncryptionService` (AES-256-GCM with 96-bit random IV and 128-bit authentication tag).
+- **Generation**: Generated with a cryptographically secure RNG (`[System.Security.Cryptography.RandomNumberGenerator]`) by `generate-secrets.ps1` (or `generate-secrets.sh`) **only if the file does not already exist**. An existing key is **never overwritten**.
+- **Secure Custody**: Operators must store the key in an encrypted vault or password manager **separately from database backups**.
+- **Consequences of Key Loss**: Stored ciphertext is permanently unrecoverable without the matching key. A database restore from backup cannot decrypt stored credentials unless the exact key is also restored.
+- **Consequences of Overwriting**: AES-GCM ciphertext authenticated under one key fails authentication under another. Overwriting the key renders all existing credentials undecryptable.
+- **Fail-Closed Startup Behavior**: If the key is absent at container start, the application context starts normally and the `CredentialEncryptionService` bean is omitted. Existing credential-free resources operate normally. Attempting to persist or update credentials returns `503 ERR_SYSTEM_UNAVAILABLE`. Executing an authorized action against a resource with stored credentials fails closed with `503 ERR_SYSTEM_UNAVAILABLE`. No plaintext fallback exists.
+- **Container Isolation**: Injected via Compose secrets into the `app` container only. The one-shot `migrate` service does not receive or need the key. Keep the key out of source control, image layers, frontend code, and ordinary environment configuration.
 
 `docker-compose.yml` declares the `secrets:` block and mounts each file read-only at
 `/run/secrets/<name>`; only mount **paths** appear in `docker compose config` — the values are
@@ -254,7 +265,7 @@ redis non-root AOF persistence, actuator origin gate) — see
 9. `overall` DOWN when Redis stopped; readiness stays UP (optional Redis, fail-closed holds).
 10. `overall` DOWN when OPA stopped; readiness stays UP (fail-closed: decision returns 503).
 11. Decision evaluation: low-risk ALLOW, high-risk HUMAN_APPROVAL, missing-resource DENY via OPA.
-12. Schema history at **v13** (`flyway_schema_history`), no pending migrations, validate passed.
+12. Schema history at **V15** (`flyway_schema_history`), no pending migrations, validate passed.
 13. App replicas show unique `dc.details.node` in health detail (node identity).
 14. `flyway valid` / migrate idempotency: re-run migrate → `migrationsExecuted=0`, exit 0.
 15. Redis `CONFIG GET maxmemory-policy` → `noeviction`; `appendonly yes` (AOF).
@@ -275,6 +286,16 @@ redis non-root AOF persistence, actuator origin gate) — see
 25. No `.env`/`.env-example` secrets and no image-baked secrets (P1/P2); login, AUTH, PG auth,
     replica byte-identity, log redaction, graceful stop, dependency recovery and edge routing
     all green in one run (P4..P12).
+26. App container key injection: `docker exec <app> printenv CREDENTIAL_ENCRYPTION_KEY` exits 0
+    without printing the key value.
+27. Flyway migration V15: confirms single `alpenglow` organization and single
+    `admin@alpenglow.example.com` administrator with designated authorized-person foreign key.
+28. Remediated V15 credential: administrator seeded with unique strong BCrypt hash; plaintext
+    comment eliminated; prompt rotation before exposing login outside staging.
+29. Existing demo resources (`DEMO-ECHO`, `INVOICE-API`, `HIGH-API`) continue working without
+    credentials; SSRF guard actively blocks loopback/RFC1918/link-local egress.
+30. Log and audit security: verify that no credential values or encryption keys appear in
+    application logs, audit event records, or API error payloads.
 
 ## 11. Health, Liveness & Readiness
 
@@ -383,17 +404,26 @@ redis non-root AOF persistence, actuator origin gate) — see
 - `postgres:16-alpine`, internal volume `pgdata`, superuser password from the `db_password`
   secret file (`POSTGRES_PASSWORD_FILE=/run/secrets/db_password`).
 - **Single migrator**: `migrate` one-shot job (`--netherite.migrate-only=true`,
-  `FLYWAY_ENABLED=true`). Replicas boot `FLYWAY_ENABLED=false`. Proven: fresh DB applies 14
-  migrations (V1..V14) → exit 0; re-run → 0 migrations → exit 0; V1..V14 checksums
-  byte-identical across DBs (pgverify IT `PostgresUpgradePathIT.checksumsStableAcrossRuns`,
-  18/18 ITs green).
-- Migration sources: `db/migration` (V1..V9, V12, V13, V14 — the main run-time source, applied
+  `FLYWAY_ENABLED=true`). Replicas boot `FLYWAY_ENABLED=false`. Proven: fresh DB applies 15
+  migrations (V1..V15) → exit 0; re-run → 0 migrations → exit 0.
+- Migration sources: `db/migration` (V1..V9, V12, V13, V14, V15 — the main run-time source, applied
   by the app, migrate job and pgverify profile) and `db/postgresql` (V10, V11). WS6 added `V12`
   (designated authorized person) and `V13` (role removal). LLM normalization Step 2 added `V14`
-  (`action_parameter_schemas` — registered action parameter schemas).
+  (`action_parameter_schemas` — registered action parameter schemas). Phase 5H/5I added `V15`
+  (`alpenglow_tenant_setup` — AlpenGlow Enterprise organization and administrator user setup).
+- **V15 Details & Credential Remediation**: V15 is forward-only, additive DML (no DDL schema
+  alterations). It provisions the AlpenGlow Enterprise tenant (`slug='alpenglow'`) and its
+  initial administrator (`admin@alpenglow.example.com`). The demonstration credential was
+  remediated prior to deployment: the plaintext comment was stripped and the demonstration
+  hash was replaced with a newly generated, unique BCrypt hash from a strong random password.
+  V15 is transactional and idempotent (`ON CONFLICT DO NOTHING`).
+- **Existing Resource Compatibility**: All existing pre-V15 resources (`DEMO-ECHO`, `HIGH-API`,
+  `INVOICE-API`) have `encrypted_credentials IS NULL`. They remain fully functional without
+  requiring credential encryption or migration. Ciphertext is only stored when credentials are
+  explicitly supplied.
 - `spring.jpa.hibernate.ddl-auto=validate` enforces Hibernate↔DDL agreement at boot.
-- **Never edit an applied migration (V1..V14).** New schema only via new `V15+` files
-  (expand/contract; see WS4 Phase 18).
+- **Never edit an applied migration (V1..V15).** Once applied to a database, migrations are
+  checksum-frozen; new schema/data changes must use `V16+` files (expand/contract; see WS4 Phase 18).
 
 ## 17. Redis Coordination
 
@@ -470,10 +500,21 @@ Live JVM matrix (baseline/Redis/OPA/PG each down+restore) — WS4 ledger Phase 8
 
 Full expand/contract runbook + rollback constraints (app-image rollback is instant and safe;
 schema rollback is restore-only, NOT zero-downtime) → WS4 ledger Phase 18. Summary:
-- Upgrade: backup → publish image → `docker compose run --rm migrate` (applies V9+ once) →
-  roll replicas (graceful drain) → verify.
-- Rollback: redeploy previous image tag; additive schema stays; if a destructive migration
-  landed, restore PG from backup (downtime, clearly documented). No down-migrations exist.
+- **Immutable Image Tagging**: Never build directly over the only known-good tag without a named rollback copy.
+  Before building a new release, preserve the running image:
+  `docker tag netherite-agent-app:0.1.0 netherite-agent-app:pre-5i-20261020`
+  Tag the newly built release with an immutable identifier, e.g.:
+  `netherite-agent-app:0.1.0-phase5g-20261020`.
+- **Pre-Deployment Backup & Drill**:
+  1. Generate fresh database dump: `.\scripts\netherite-backup.ps1`.
+  2. Validate restore into a disposable container:
+     `.\scripts\netherite-restore.ps1 -BackupFile .\backups\<new-dump>.dump -PerformRestore`.
+  3. Archive the encryption key to the vault alongside the backup metadata.
+- **Upgrade Sequence**: Pre-deploy backup + drill → record rollback image tag → generate/vault key → build new image → `docker compose run --rm migrate` (applies V15) → `docker compose up -d --no-deps app` → verify health.
+- **Rollback Constraints**:
+  - *App Image Rollback*: Retag Compose image to rollback image; `docker compose up -d --no-deps app`. Since V15 is additive DML, the pre-5E/pre-5G app ignores the added tenant/user rows safely.
+  - *Database Rollback*: V15 is transactional and additive. In case of unexpected issues, prefer leaving the additive rows in place; destructive rollback requires full database restore from the pre-V15 dump.
+  - *Credential Compatibility*: If new credentials have been written, a pre-5G app cannot decrypt them and actions fail closed. If the encryption key is lost, no rollback or database restore can decrypt ciphertext.
 
 ## 23. Troubleshooting
 

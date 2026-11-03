@@ -88,13 +88,47 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGenericException(
             Exception ex, HttpServletRequest request) {
+        if (isExpectedClientDisconnect(ex)) {
+            // Expected transport artifact, not an application failure: the SSE
+            // absolute-timeout expiry (AsyncRequestTimeoutException) and writes to
+            // an already-gone client (Tomcat disconnect reports). The client is
+            // gone so the body is discarded by the container; logging at debug
+            // without a stack keeps routine disconnects out of the error stream.
+            // Response shape and metrics are intentionally unchanged.
+            log.debug("Client disconnected before response completed: {}",
+                    LogSanitizer.clean(String.valueOf(ex.getMessage())));
+        } else {
+            log.error("Unhandled exception: {}", LogSanitizer.clean(ex.getMessage()), ex);
+        }
         metrics.appError("ERR_INTERNAL_SERVER_ERROR");
-        log.error("Unhandled exception: {}", LogSanitizer.clean(ex.getMessage()), ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                 "error", "ERR_INTERNAL_SERVER_ERROR",
                 "message", "An unexpected internal error occurred",
                 "requestId", currentRequestId(request),
                 "timestamp", Instant.now().toString()));
+    }
+
+    /**
+     * Confirmed expected-disconnect signals. Matched by class name (never by
+     * importing container internals) and by Tomcat's stable disconnect message
+     * fragments, walking the cause chain. Anything else remains an ERROR.
+     */
+    static boolean isExpectedClientDisconnect(Throwable ex) {
+        for (Throwable current = ex; current != null; current = current.getCause()) {
+            String className = current.getClass().getName();
+            if (className.endsWith("AsyncRequestTimeoutException")
+                    || className.contains("ClientAbortException")) {
+                return true;
+            }
+            String message = String.valueOf(current.getMessage());
+            if (message.contains("disconnected client")
+                    || message.contains("Response not usable after response errors")
+                    || message.contains("Broken pipe")
+                    || message.contains("Connection reset")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String currentRequestId(HttpServletRequest request) {

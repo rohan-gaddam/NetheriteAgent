@@ -101,6 +101,24 @@ deny_reasons contains "Agent is not active" if {
     input.context.agentStatus == "REVOKED"
 }
 
+# The binding's allow-list is authoritative. An empty list grants nothing (never
+# "allow all"), and an action outside a non-empty list is denied even before the
+# routing layer's binding check. The fact is only present when the target resource
+# and binding were resolved, so other consumers of the base policy are unaffected.
+deny_reasons contains "Agent binding does not permit any action" if {
+    allowed := input.context.allowedActions
+    is_array(allowed)
+    count(allowed) == 0
+}
+
+deny_reasons contains "Agent binding does not permit this action" if {
+    allowed := input.context.allowedActions
+    is_array(allowed)
+    count(allowed) > 0
+    not in_list("*", allowed)
+    not in_list(input.action.type, allowed)
+}
+
 # ---------------------------------------------------------------------------
 # Organization (tenant) policy join — strictest-first, additive-only.
 # A tenant that pushed a disabled policy document fails closed for its org.

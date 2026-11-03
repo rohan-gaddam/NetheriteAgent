@@ -451,8 +451,9 @@ class GatewayIntegrationTest {
     @DisplayName("IDEM-2: Duplicate concurrent request is rejected")
     void testDuplicateConcurrentRejected() throws Exception {
         String idemKey = "idem-dup-" + UUID.randomUUID();
+        String agentScopedKey = registeredAgent.agent().getId().toString() + ":" + idemKey;
         boolean claimed = idempotencyStore.tryClaim(
-                organization.getId().toString(), idemKey, Duration.ofMinutes(30));
+                organization.getId().toString(), agentScopedKey, Duration.ofMinutes(30));
         assertTrue(claimed);
 
         GatewayActionRequest request = GatewayActionRequest.builder()

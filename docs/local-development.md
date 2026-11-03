@@ -17,7 +17,7 @@ docker compose up -d
 ```
 
 Service endpoints:
-- **PostgreSQL 16**: `localhost:5432` (Database: `netherite`, User: `netherite_admin`; password is a provisioned file secret — see `infrastructure/docker/secrets.example/` and `scripts/generate-secrets.ps1`, never committed)
+- **PostgreSQL 16**: `localhost:5432` (Database: `netherite`, User: `netherite_admin`, Password: `netherite_secure_pass`)
 - **Redis 7**: `localhost:6379`
 - **OPA**: `http://localhost:8181`
 
@@ -52,8 +52,7 @@ Full details and recovery procedures: `docs/operations-and-recovery.md`.
 ## 2. Building and Running the Backend
 Build using project-local JDK 21 and Maven:
 ```powershell
-# From a checkout of this repository:
-$projectDir = (Get-Location).Path  # or the directory containing this checkout
+$projectDir = "E:\Rohan Projects\NetheriteAgent"
 $env:JAVA_HOME = "$projectDir\.tools\jdk-21"
 $env:PATH = "$projectDir\.tools\jdk-21\bin;$projectDir\.tools\maven\bin;$env:PATH"
 

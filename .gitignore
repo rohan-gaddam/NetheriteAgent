@@ -73,3 +73,7 @@ infrastructure/docker/opa/policies-data/
 # Runtime OPA admin-token data (authz_tokens.json): compose now writes it to a
 # container-local tmpfs; retained here as defense-in-depth so a stray copy on the
 # host is never committed.
+
+# Local Agent Key
+agent_key.txt
+NETHERITEAGENT_CAPABILITY_AND_SECURITY_ASSESSMENT.md

@@ -57,7 +57,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test")
 class ControlPlaneOnboardingApiTest {
 
-    private static final String OWNER_EMAIL = "owner@example.com";
+    private static final String OWNER_EMAIL = "strangeunknown03@gmail.com";
     private static final String OWNER_PASSWORD = "Fakepassword@26";
     private static final String COOKIE_NAME = "neth_sid";
 

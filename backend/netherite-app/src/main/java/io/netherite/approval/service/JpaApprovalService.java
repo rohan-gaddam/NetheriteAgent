@@ -21,6 +21,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -37,9 +39,25 @@ public class JpaApprovalService implements ApprovalService {
     private final ApprovalRequestRepository approvalRepository;
     private final AuditService auditService;
     private final NotificationService notificationService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ApprovalEventPublisher eventPublisher;
+    /**
+     * Spring Boot's auto-configured mapper. It registers {@code JavaTimeModule}, so the required
+     * {@code Instant timestamp} of a canonical action round-trips through the ticket's JSON column.
+     * The previous bare {@code new ObjectMapper()} had no JSR-310 support: serialising the timestamp
+     * threw, the throw was swallowed, and every ticket persisted an EMPTY canonical action.
+     */
+    private final ObjectMapper objectMapper;
 
     private static final Duration TICKET_TTL = Duration.ofHours(24);
+
+    /**
+     * Fields a stored canonical action must carry to remain executable. {@code CanonicalAction}
+     * is annotated {@code @JsonInclude(NON_NULL)}, so a null or blank required field is simply
+     * absent from the serialized map - an empty map means the action is unusable.
+     */
+    private static final List<String> REQUIRED_CANONICAL_ACTION_FIELDS = List.of(
+            "actionId", "organizationId", "agentId", "actionType",
+            "targetResource", "timestamp", "parameters");
 
     @Override
     @Transactional
@@ -63,19 +81,9 @@ public class JpaApprovalService implements ApprovalService {
             throw new NetheriteException(SystemErrorCode.ERR_INVALID_PARAMETERS, "Invalid agent ID");
         }
 
-        Map<String, Object> actionMap;
-        try {
-            actionMap = objectMapper.convertValue(action, Map.class);
-        } catch (Exception e) {
-            actionMap = Map.of();
-        }
-
-        Map<String, Object> contextMap;
-        try {
-            contextMap = objectMapper.convertValue(context, Map.class);
-        } catch (Exception e) {
-            contextMap = Map.of();
-        }
+        Map<String, Object> actionMap = canonicalizeOrThrow(action, "canonical action");
+        Map<String, Object> contextMap = canonicalizeOrThrow(context, "decision context");
+        requireCompleteAction(actionMap);
 
         ApprovalRequestEntity entity = ApprovalRequestEntity.builder()
                 .organizationId(orgId)
@@ -205,6 +213,8 @@ public class JpaApprovalService implements ApprovalService {
             log.error("Failed to send approval resolved notification: {}", e.getMessage());
         }
 
+        publishDecisionAfterCommit(entity.getOrganizationId().toString(), ticketId, decision);
+
         return toTicket(entity);
     }
 
@@ -280,7 +290,38 @@ public class JpaApprovalService implements ApprovalService {
             log.error("Failed to send approval resolved notification for ticket {}: {}", ticketId, e.getMessage());
         }
 
+        publishDecisionAfterCommit(entity.getOrganizationId().toString(), ticketId, decision);
+
         return toTicket(entity);
+    }
+
+    /**
+     * Broadcasts the approval decision to SSE subscribers of the ticket's organization only,
+     * and only after the decision transaction commits. A decision that later rolls back is
+     * never broadcast. Payload is minimal (ticketId + status) to match the existing
+     * frontend contract; notes, approver identity, and action content are never exposed.
+     */
+    private void publishDecisionAfterCommit(String organizationId, String ticketId, ApprovalStatus decision) {
+        String eventType = decision == ApprovalStatus.APPROVED ? "APPROVAL_APPROVED" : "APPROVAL_REJECTED";
+        Map<String, String> payload = Map.of("ticketId", ticketId, "status", decision.name());
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        eventPublisher.publishEvent(organizationId, eventType, payload);
+                    } catch (Exception e) {
+                        log.error("Failed to publish SSE decision event for ticket {}: {}", ticketId, e.getMessage());
+                    }
+                }
+            });
+        } else {
+            try {
+                eventPublisher.publishEvent(organizationId, eventType, payload);
+            } catch (Exception e) {
+                log.error("Failed to publish SSE decision event for ticket {}: {}", ticketId, e.getMessage());
+            }
+        }
     }
 
     @Override
@@ -344,6 +385,50 @@ public class JpaApprovalService implements ApprovalService {
             return context.getUserId();
         }
         return null;
+    }
+
+    /**
+     * Serializes a value into the ticket's JSON column, surfacing any failure. Swallowing this
+     * error is what previously persisted an EMPTY canonical action: a ticket could be approved by a
+     * human and then be un-executable, with nothing in the logs pointing at the cause.
+     */
+    private Map<String, Object> canonicalizeOrThrow(Object value, String what) {
+        Map<String, Object> converted;
+        try {
+            converted = objectMapper.convertValue(value, Map.class);
+        } catch (Exception e) {
+            log.error("Failed to serialize approval {}: {}", what, e.getMessage());
+            throw new NetheriteException(SystemErrorCode.ERR_CANONICALIZATION_FAILED,
+                    "Approval " + what + " could not be serialized into a valid canonical format");
+        }
+        if (converted == null) {
+            log.error("Serialization of approval {} produced a null map", what);
+            throw new NetheriteException(SystemErrorCode.ERR_CANONICALIZATION_FAILED,
+                    "Approval " + what + " could not be serialized into a valid canonical format");
+        }
+        return converted;
+    }
+
+    /**
+     * Guarantees a ticket is never persisted with an empty or incomplete canonical action. An
+     * approval of an action that cannot be reconstructed is worthless, so this fails closed before
+     * the row is written rather than storing a ticket that can never execute.
+     */
+    private void requireCompleteAction(Map<String, Object> actionMap) {
+        List<String> missing = REQUIRED_CANONICAL_ACTION_FIELDS.stream()
+                .filter(field -> {
+                    Object value = actionMap.get(field);
+                    if (value == null) {
+                        return true;
+                    }
+                    return value instanceof String string && string.isBlank();
+                })
+                .toList();
+        if (!missing.isEmpty()) {
+            log.error("Refusing to create approval ticket - canonical action is missing required fields {}", missing);
+            throw new NetheriteException(SystemErrorCode.ERR_CANONICALIZATION_FAILED,
+                    "Approval ticket cannot be created: canonical action is incomplete (missing " + missing + ")");
+        }
     }
 
     private ApprovalTicket toTicket(ApprovalRequestEntity entity) {

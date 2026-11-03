@@ -419,7 +419,7 @@ class AuthorizedPersonLifecycleSecurityTest {
      * behaviour these tests need to coexist with.</p>
      */
     private Cookie ownerSession() throws Exception {
-        String email = System.getProperty("test.owner.email", "owner@example.com");
+        String email = System.getProperty("test.owner.email", "strangeunknown03@gmail.com");
         String password = System.getProperty("test.owner.password", "Fakepassword@26");
         MvcResult result = mockMvc.perform(post("/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)

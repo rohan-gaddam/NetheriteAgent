@@ -69,11 +69,11 @@ class PreAuthRateLimitFilterIntegrationTest {
     void accountFloodAcrossIpsIsDenied() throws Exception {
         String[] ips = {"203.0.113.11", "203.0.113.12", "203.0.113.13", "203.0.113.14", "203.0.113.15"};
         for (int i = 0; i < 4; i++) {
-            mockMvc.perform(login(ips[i], "owner@example.com", "Fakepassword@26"))
+            mockMvc.perform(login(ips[i], "strangeunknown03@gmail.com", "Fakepassword@26"))
                     .andExpect(status().isOk());
         }
         // Fifth source, same account -> account bucket (limit 4) denies even though this IP is fresh.
-        mockMvc.perform(login(ips[4], "owner@example.com", "Fakepassword@26"))
+        mockMvc.perform(login(ips[4], "strangeunknown03@gmail.com", "Fakepassword@26"))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.error").value("ERR_RATE_LIMIT_EXCEEDED"));
     }

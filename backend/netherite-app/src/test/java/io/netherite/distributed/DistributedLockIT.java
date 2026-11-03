@@ -40,32 +40,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("distributed")
 class DistributedLockIT {
 
-    /**
-     * Portable Redis test-tooling resolution (public-release safe: no machine-specific
-     * absolute paths). Override with {@code -Dtest.redis.home=<dir>} or
-     * {@code REDIS_HOME=<dir>} (directory containing {@code redis-cli.exe}); otherwise
-     * {@code redis-cli} is resolved from {@code PATH}. The restart script used by the
-     * live-outage test is {@code -Dtest.redis.bootBat=<file>} or
-     * {@code REDIS_BOOT_BAT=<file>}; it must be set explicitly for that test.
-     */
-    private static final String REDIS_HOME = resolveRedisHome();
-    private static final String BOOT_BAT = resolveBootBat();
-
-    private static String resolveRedisHome() {
-        String home = System.getProperty("test.redis.home");
-        if (home == null || home.isBlank()) {
-            home = System.getenv("REDIS_HOME");
-        }
-        return (home == null || home.isBlank()) ? "" : home;
-    }
-
-    private static String resolveBootBat() {
-        String boot = System.getProperty("test.redis.bootBat");
-        if (boot == null || boot.isBlank()) {
-            boot = System.getenv("REDIS_BOOT_BAT");
-        }
-        return (boot == null || boot.isBlank()) ? "" : boot;
-    }
+    private static final String REDIS_HOME = "E:\\Rohan Projects\\NetheriteAgent\\.tools\\redis-windows";
+    private static final String BOOT_BAT = "C:\\Users\\LEGION\\AppData\\Local\\Temp\\opencode\\boot-redis.bat";
 
     @Autowired
     private RedisDistributedLockManager managerA;
@@ -274,10 +250,6 @@ class DistributedLockIT {
     }
 
     private void restartRedis() {
-        if (BOOT_BAT.isEmpty()) {
-            throw new IllegalStateException(
-                    "Cannot restart Redis: set -Dtest.redis.bootBat=<script> or REDIS_BOOT_BAT=<script>");
-        }
         try {
             // Discard all output handles: the spawned redis-server outlives the test JVM,
             // and an inherited stdout/stderr pipe would otherwise keep the parent shell
@@ -304,7 +276,7 @@ class DistributedLockIT {
 
     private String redisCli(List<String> args) {
         List<String> cmd = new ArrayList<>();
-        cmd.add(REDIS_HOME.isEmpty() ? "redis-cli" : REDIS_HOME + "\\redis-cli.exe");
+        cmd.add(REDIS_HOME + "\\redis-cli.exe");
         cmd.addAll(args);
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
         try {

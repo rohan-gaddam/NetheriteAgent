@@ -8,8 +8,7 @@
  *
  * Preconditions:
  *   - backend on :8080 running with the 'test' profile
- *       (owner: disposable test-only credentials defined as OWNER_EMAIL /
- *        OWNER_PASSWORD below; never production values)
+ *       (owner: strangeunknown03@gmail.com / Fakepassword@26)
  *   - frontend dev server on :3000 (Vite, proxying /v1 to :8080)
  *   - Microsoft Edge installed (script launches the msedge channel)
  *
@@ -19,9 +18,7 @@
 import { chromium } from 'playwright-core';
 
 const FRONTEND = 'http://localhost:3000';
-const OWNER_EMAIL = 'owner@example.com';
-// DISPOSABLE TEST-ONLY credential: matches the BCrypt fixture in the test
-// Spring profile; never a production value (production uses OWNER_PASSWORD_HASH secret).
+const OWNER_EMAIL = 'strangeunknown03@gmail.com';
 const OWNER_PASSWORD = 'Fakepassword@26';
 const SESSION_COOKIE = 'neth_sid';
 

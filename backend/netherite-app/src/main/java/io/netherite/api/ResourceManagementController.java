@@ -7,6 +7,7 @@ import io.netherite.domain.entity.ResourceEntity;
 import io.netherite.domain.repository.ResourceRepository;
 import io.netherite.domain.service.ResourceDomainService;
 import io.netherite.security.context.TenantContextHolder;
+import io.netherite.security.key.ResourceCredentialService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -25,6 +26,7 @@ public class ResourceManagementController {
 
     private final ResourceDomainService resourceDomainService;
     private final ResourceRepository resourceRepository;
+    private final ResourceCredentialService resourceCredentialService;
 
     @PostMapping
     public ResponseEntity<?> createResource(@RequestBody ResourceRegistrationRequest request) {
@@ -32,12 +34,15 @@ public class ResourceManagementController {
         UUID orgUuid = UUID.fromString(orgId);
 
         try {
+            String encryptedCredentials =
+                    resourceCredentialService.encryptForStorage(request.getCredentials());
+
             ResourceEntity resource = resourceDomainService.createResource(
                     orgUuid,
                     request.getName(),
                     request.getConnectorType(),
                     request.getBaseUrl(),
-                    null, // credentials handled separately
+                    encryptedCredentials,
                     request.getSensitivityLevel(),
                     request.getDescription());
 
@@ -97,6 +102,10 @@ public class ResourceManagementController {
             if (request.getBaseUrl() != null) resource.setBaseUrl(request.getBaseUrl());
             if (request.getSensitivityLevel() != null) resource.setSensitivityLevel(request.getSensitivityLevel());
             if (request.getDescription() != null) resource.setDescription(request.getDescription());
+            if (request.getCredentials() != null) {
+                resource.setEncryptedCredentials(
+                        resourceCredentialService.encryptForStorage(request.getCredentials()));
+            }
             resourceRepository.save(resource);
 
             return ResponseEntity.ok(toResourceResponse(resource));

@@ -37,9 +37,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test")
 class OwnerAuthenticationTest {
 
-    // DISPOSABLE TEST-ONLY fixtures: match the BCrypt hash in the test Spring
-    // profile; never production values (production uses OWNER_PASSWORD_HASH secret).
-    private static final String OWNER_EMAIL = "owner@example.com";
+    private static final String OWNER_EMAIL = "strangeunknown03@gmail.com";
     private static final String OWNER_PASSWORD = "Fakepassword@26";
     private static final String NON_OWNER_EMAIL = "another@gmail.com";
     private static final String SESSION_COOKIE = "neth_sid";
@@ -532,6 +530,8 @@ class OwnerAuthenticationTest {
     @Test
     @DisplayName("30. Configured owner email matches expected value")
     void configuredOwnerEmailMatchesExpected() {
-        assertEquals("owner@example.com", authProperties.getOwner().getEmail());
+        assertEquals("strangeunknown03@gmail.com", authProperties.getOwner().getEmail());
+        assertTrue(authProperties.getOwner().getEmail().endsWith("@gmail.com"),
+                "Owner email should be a Gmail address");
     }
 }

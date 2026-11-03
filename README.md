@@ -42,8 +42,7 @@ NetheriteAgent/
 
 ### Backend Build (Using project-local JDK 21 and Maven)
 ```powershell
-# From a checkout of this repository (script also available as build_backend.ps1):
-$projectDir = (Get-Location).Path  # or the directory containing this checkout
+$projectDir = "E:\Rohan Projects\NetheriteAgent"
 $env:JAVA_HOME = "$projectDir\.tools\jdk-21"
 $env:PATH = "$projectDir\.tools\jdk-21\bin;$projectDir\.tools\maven\bin;$env:PATH"
 

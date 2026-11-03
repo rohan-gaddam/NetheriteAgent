@@ -68,12 +68,78 @@ public class AuthController {
             return handleOwnerLogin(normalizedEmail, password, request, response);
         }
 
-        // All non-owner logins fail with the identical, uninformative 401 as an
-        // invalid owner password. Distinct responses would let an attacker
-        // enumerate which email addresses own direct-login accounts. The account
-        // identifier is never logged (WS8 privacy minimization).
-        log.debug("Non-owner direct login attempt rejected: mechanism=owner_login_mismatch");
-        return authenticationFailed();
+        // General user password login: authenticate against the user record
+        // persisted in NetheriteAgent's control-plane database. The tenant
+        // (organization) identity comes from the user's own database row --
+        // never from client-supplied parameters -- so a caller cannot reach
+        // another tenant by manipulating request data.
+        return handleUserLogin(normalizedEmail, password, request, response);
+    }
+
+    /**
+     * Authenticate a non-owner user against their stored password hash and
+     * establish a session bound to their own organization.
+     *
+     * <p>The organization (tenant) is resolved exclusively from
+     * {@link UserEntity#getOrganizationId()}. No tenant ID is ever accepted
+     * from the request body, headers, or query parameters. WS6: no role is
+     * assigned -- organizational authority is the single designated authorized
+     * person on the organization row, not a user attribute.
+     */
+    private ResponseEntity<?> handleUserLogin(String email, String password,
+                                              HttpServletRequest request,
+                                              HttpServletResponse response) {
+        UserEntity user = userRepository.findByEmail(email).orElse(null);
+
+        // Users without a stored password hash (OIDC-only accounts) and
+        // unknown accounts both fail with the identical 401 to prevent
+        // account enumeration. No account identifier is logged.
+        if (user == null || user.getPasswordHash() == null || user.getPasswordHash().isBlank()) {
+            log.debug("User login rejected: no password credential for email");
+            return authenticationFailed();
+        }
+
+        if (!passwordEncoder.matches(password, user.getPasswordHash())) {
+            log.debug("User login failed: invalid password");
+            return authenticationFailed();
+        }
+
+        if (!"ACTIVE".equals(user.getStatus())) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", "ERR_FORBIDDEN",
+                    "message", "User account is not active"));
+        }
+
+        // Tenant context is bound to the user's own organization. The client
+        // cannot supply or override the organization id -- it comes from the
+        // authenticated user's database record only.
+        UUID orgId = user.getOrganizationId();
+
+        // Create session (same mechanism as owner and OIDC login). Only the
+        // SHA-256 digest of the token is stored at rest; the raw credential
+        // is delivered via the HttpOnly cookie.
+        String rawSessionToken = UUID.randomUUID().toString();
+        UserSessionEntity session = UserSessionEntity.builder()
+                .userId(user.getId())
+                .organizationId(orgId)
+                .sessionToken(io.netherite.auth.session.SessionTokenHasher.hash(rawSessionToken))
+                .expiresAt(Instant.now().plus(24, ChronoUnit.HOURS))
+                .build();
+        session = userSessionRepository.save(session);
+
+        log.info("User authentication successful: userId={}, org={}",
+                IdentityHash.shortHash(user.getId().toString()),
+                IdentityHash.shortHash(orgId.toString()));
+
+        // Deliver the session credential exclusively via an HttpOnly cookie.
+        // It is never included in the response body or logged.
+        response.addHeader(HttpHeaders.SET_COOKIE,
+                sessionCookieService.createSessionCookie(rawSessionToken, request).toString());
+
+        return ResponseEntity.ok(Map.of(
+                "userId", user.getId().toString(),
+                "organizationId", orgId.toString(),
+                "expiresAt", session.getExpiresAt().toString()));
     }
 
     private ResponseEntity<?> handleOwnerLogin(String email, String password,

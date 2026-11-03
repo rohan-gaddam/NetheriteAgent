@@ -354,30 +354,30 @@ Maven). Nothing is quoted from the earlier Step 1 baseline run.
 ### Commands (from `backend/`)
 
 ```
-$env:JAVA_HOME='<repo-checkout>\.tools\jdk-21'
+$env:JAVA_HOME='E:\Rohan Projects\NetheriteAgent\.tools\jdk-21'
 $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
-& "<repo-checkout>\.tools\maven\bin\mvn.cmd" -o -pl netherite-ingestion -am test "-Dtest=SemanticActionPromoterTest" "-Dsurefire.failIfNoSpecifiedTests=false"
-& "<repo-checkout>\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am test "-Dtest=ActionParameterSchemaParserTest,ActionParameterSchemaAdminServiceTest,DbActionParameterSchemaProviderTest,ActionSchemaAdminSecurityTest" "-Dsurefire.failIfNoSpecifiedTests=false"
-& "<repo-checkout>\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am test "-Dtest=PostgresApprovalPersistenceIT,PostgresUpgradePathIT,EnterpriseRuntimeIT,PostgresActionSchemaPersistenceIT" "-Dsurefire.failIfNoSpecifiedTests=false"
+& "E:\Rohan Projects\NetheriteAgent\.tools\maven\bin\mvn.cmd" -o -pl netherite-ingestion -am test "-Dtest=SemanticActionPromoterTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+& "E:\Rohan Projects\NetheriteAgent\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am test "-Dtest=ActionParameterSchemaParserTest,ActionParameterSchemaAdminServiceTest,DbActionParameterSchemaProviderTest,ActionSchemaAdminSecurityTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+& "E:\Rohan Projects\NetheriteAgent\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am test "-Dtest=PostgresApprovalPersistenceIT,PostgresUpgradePathIT,EnterpriseRuntimeIT,PostgresActionSchemaPersistenceIT" "-Dsurefire.failIfNoSpecifiedTests=false"
 ```
 
 Step 3 (focused + full regression):
 
 ```
-$env:JAVA_HOME='<repo-checkout>\.tools\jdk-21'
+$env:JAVA_HOME='E:\Rohan Projects\NetheriteAgent\.tools\jdk-21'
 $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
-& "<repo-checkout>\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am test "-Dtest=LlmCandidateDecoderTest,GeminiLlmProviderTest,SemanticActionNormalizerTest,LlmConfigurationValidatorTest,LlmProviderConfigurationTest,GatewayIntegrationTest" "-Dsurefire.failIfNoSpecifiedTests=false"
-& "<repo-checkout>\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am test
+& "E:\Rohan Projects\NetheriteAgent\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am test "-Dtest=LlmCandidateDecoderTest,GeminiLlmProviderTest,SemanticActionNormalizerTest,LlmConfigurationValidatorTest,LlmProviderConfigurationTest,GatewayIntegrationTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+& "E:\Rohan Projects\NetheriteAgent\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am test
 ```
 
 Running one real Gemini API call (never prints the key):
 
 ```
-$env:JAVA_HOME='<repo-checkout>\.tools\jdk-21'
+$env:JAVA_HOME='E:\Rohan Projects\NetheriteAgent\.tools\jdk-21'
 $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
 $env:LLM_PROVIDER='gemini'
 $env:GEMINI_API_KEY='<your-key-from-the-environment>'   # already exported; never commit it
-& "<repo-checkout>\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am spring-boot:run
+& "E:\Rohan Projects\NetheriteAgent\.tools\maven\bin\mvn.cmd" -o -pl netherite-app -am spring-boot:run
 # then POST a rawPrompt to /v1/gateway/execute with a valid X-Netherite-Agent-Key
 ```
 

@@ -14,9 +14,7 @@
  *   - backend on :8080  (default profile, OIDC enabled, PG on :5433)
  *   - frontend dev server on :3000 (Vite, proxying /v1 to :8080)
  *   - Keycloak on :8180 with realm 'netherite' (client 'netherite-agent'),
- *     user employee@netherite.local (local Keycloak dev-realm fixture password
- *     defined as SSO_PASSWORD below; harness-only, never production),
- *     role netherite-admin
+ *     user employee@netherite.local / Workforce@2026, role netherite-admin
  *   - org 'netherite' + verified domain 'netherite.local' + ACTIVE IdP config
  *
  * Run:  node e2e/ws3-real-sso.e2e.mjs
@@ -27,8 +25,6 @@ import { chromium } from 'playwright-core';
 const FRONTEND = 'http://localhost:3000';
 const IDP_BASE = 'http://localhost:8180/realms/netherite';
 const SSO_EMAIL = 'employee@netherite.local';
-// DISPOSABLE TEST-ONLY credential for the local Keycloak dev-realm fixture user;
-// harness-only, never a production value.
 const SSO_PASSWORD = 'Workforce@2026';
 const SESSION_COOKIE = 'neth_sid';
 

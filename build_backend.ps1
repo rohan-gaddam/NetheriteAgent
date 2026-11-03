@@ -2,7 +2,7 @@ param (
     [string]$Goals = "clean test"
 )
 $ErrorActionPreference = 'Stop'
-$projectDir = $PSScriptRoot
+$projectDir = 'E:\Rohan Projects\NetheriteAgent'
 $jdkDir = Join-Path $projectDir '.tools\jdk-21'
 $mavenDir = Join-Path $projectDir '.tools\maven'
 $mvnCmd = Join-Path $mavenDir 'bin\mvn.cmd'

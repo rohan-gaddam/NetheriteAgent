@@ -262,8 +262,8 @@ Notes: `npm audit` reports 2 advisories (1 moderate, 1 high) in the lockfile's t
 ## Phase 21 - containerized secret-handling verification (P1..P12) (2026-09-25)
 
 Automated live proof. Suite: `infrastructure/docker/scripts/verify-secret-handling.ps1` (Win)
-- P1..P12 against the running compose stack; engine is `docker` on PATH
-  (e.g. Docker Desktop's `docker.exe`).
+- P1..P12 against the running compose stack; engine at
+`C:\Users\LEGION\AppData\Local\Programs\DockerDesktop\resources\bin\docker.exe`.
 - Secrets: `db_password`/`redis_password` 64-hex from `generate-secrets.ps1`;
   `owner_password_hash` = BCrypt `$2a$10$CQmhh...` (60 bytes, no BOM/newline) - the same value
   delivered to app replicas at runtime.

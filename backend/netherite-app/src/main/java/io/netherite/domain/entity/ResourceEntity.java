@@ -17,6 +17,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.ToString;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -49,6 +50,7 @@ public class ResourceEntity {
     private String baseUrl;
 
     @Column(name = "encrypted_credentials", columnDefinition = "TEXT")
+    @ToString.Exclude
     private String encryptedCredentials;
 
     @Enumerated(EnumType.STRING)

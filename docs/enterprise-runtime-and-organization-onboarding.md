@@ -104,7 +104,7 @@ Edge (playwright `msedge` channel) for E2E.
 |---|---|---|
 | PostgreSQL | 5433 | `netherite_admin`, password empty (trust); databases `netherite`, `netherite_verify`, `netherite_upgrade` |
 | Keycloak | 8180 | master `admin`/`admin123`; realm `netherite` |
-| Backend (default profile) | 8080 | owner `owner@example.com` / disposable test-only password (see `e2e/ws2-human-session.e2e.mjs` `OWNER_PASSWORD`; never production) |
+| Backend (default profile) | 8080 | owner `strangeunknown03@gmail.com` / `Fakepassword@26` |
 | Frontend (Vite) | 3000 | dev server proxying `/v1` → :8080 |
 
 Backend boot env (default profile):

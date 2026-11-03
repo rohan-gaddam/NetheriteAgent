@@ -3,6 +3,7 @@ package io.netherite.routing.service;
 import io.netherite.common.exception.NetheriteException;
 import io.netherite.common.exception.SystemErrorCode;
 import io.netherite.common.model.CanonicalAction;
+import io.netherite.connectors.aierp.AiErpActionRouteService;
 import io.netherite.domain.entity.ResourceEntity;
 import io.netherite.domain.repository.ResourceRepository;
 import io.netherite.domain.service.BindingDomainService;
@@ -28,6 +29,7 @@ public class DefaultResourceRoutingService implements ResourceRoutingService {
 
     private final ResourceRepository resourceRepository;
     private final BindingDomainService bindingDomainService;
+    private final AiErpActionRouteService aiErpActionRouteService;
 
     @Override
     @Transactional(readOnly = true)
@@ -44,9 +46,13 @@ public class DefaultResourceRoutingService implements ResourceRoutingService {
             return Optional.empty();
         }
 
-        // Find resource by name within the tenant's organization
+        // Find resource by name within the tenant's organization (case-insensitive fallback)
         Optional<ResourceEntity> resourceOpt = resourceRepository.findByNameAndOrganizationId(
                 action.getTargetResource(), organizationId);
+        if (resourceOpt.isEmpty()) {
+            resourceOpt = resourceRepository.findByNameIgnoreCaseAndOrganizationId(
+                    action.getTargetResource(), organizationId);
+        }
 
         if (resourceOpt.isEmpty()) {
             log.warn("Resource '{}' not found for organization '{}'", action.getTargetResource(), action.getOrganizationId());
@@ -60,15 +66,27 @@ public class DefaultResourceRoutingService implements ResourceRoutingService {
             return Optional.empty();
         }
 
-        ResourceRoute route = ResourceRoute.builder()
+        ResourceRoute.ResourceRouteBuilder routeBuilder = ResourceRoute.builder()
                 .resourceId(resource.getId().toString())
                 .resourceName(resource.getName())
                 .connectorType(resource.getConnectorType())
                 .baseUrl(resource.getBaseUrl())
-                .sensitivityLevel(resource.getSensitivityLevel())
-                .build();
+                .sensitivityLevel(resource.getSensitivityLevel());
 
-        return Optional.of(route);
+        // Carry the encrypted credential record on the route. Decryption is deliberately
+        // deferred to the execution orchestrator, after the agent-resource binding has
+        // been authorized, so plaintext exists only for an authorized connector call.
+        if (resource.getEncryptedCredentials() != null && !resource.getEncryptedCredentials().isBlank()) {
+            routeBuilder.credentialReference(resource.getEncryptedCredentials());
+        }
+
+        ResourceRoute baseRoute = routeBuilder.build();
+
+        // Enrich route with action-specific HTTP method, path template, and connector config
+        ResourceRoute enrichedRoute = aiErpActionRouteService.enrichRouteForAction(
+                baseRoute, organizationId, resource.getId(), action.getActionType());
+
+        return Optional.of(enrichedRoute);
     }
 
     @Override

@@ -131,4 +131,72 @@ class SsrfGuardValidatorImplTest {
     void testRejectsUnresolvableHost() {
         assertFalse(validator.isUriPermitted(URI.create("https://this-host-does-not-exist-12345.invalid/")));
     }
+
+    @Test
+    @DisplayName("Permits the exact configured AI-ERP private destination")
+    void testPermitsExactConfiguredAiErpDestination() {
+        SsrfGuardValidatorImpl allowlisted = allowlisted("10.20.30.40:5000", "[fdc4:f303:9324::254]:5000");
+        assertTrue(allowlisted.isUriPermitted(URI.create("http://10.20.30.40:5000/api/v3.0/p/agent/schema")));
+        assertTrue(allowlisted.isUriPermitted(URI.create("http://[fdc4:f303:9324::254]:5000/api/v3.0/p/agent/schema")));
+    }
+
+    @Test
+    @DisplayName("Blocks unapproved loopback when a different destination is allowlisted")
+    void testBlocksUnapprovedLoopback() {
+        SsrfGuardValidatorImpl allowlisted = allowlisted("10.20.30.40:5000");
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://127.0.0.1:5000/")));
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://localhost:5000/")));
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://127.0.0.2:5000/")));
+    }
+
+    @Test
+    @DisplayName("Blocks unapproved RFC1918 destination")
+    void testBlocksUnapprovedPrivate() {
+        SsrfGuardValidatorImpl allowlisted = allowlisted("10.20.30.40:5000");
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://192.168.1.10:5000/")));
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://172.16.0.1:5000/")));
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://10.20.30.41:5000/")));
+    }
+
+    @Test
+    @DisplayName("Blocks hostname resolving to a prohibited address when not allowlisted")
+    void testBlocksHostnameResolvingToProhibitedAddress() {
+        SsrfGuardValidatorImpl allowlisted = allowlisted("localhost:5001");
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://localhost:5000/")));
+    }
+
+    @Test
+    @DisplayName("Allowlist remains scoped to the exact host and port")
+    void testAllowlistScopeDoesNotWiden() {
+        SsrfGuardValidatorImpl allowlisted = allowlisted("10.20.30.40:5000");
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://10.20.30.40:5001/")));
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://10.20.30.40/")));
+    }
+
+    @Test
+    @DisplayName("Blocks link-local and metadata even when that exact destination is allowlisted")
+    void testAllowlistStillBlocksLinkLocalAndMetadata() {
+        SsrfGuardValidatorImpl allowlisted = allowlisted("169.254.169.254:80", "[fe80::1]:5000");
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://169.254.169.254/latest/meta-data/")));
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://[fe80::1]:5000/")));
+    }
+
+    @Test
+    @DisplayName("Allowlist still enforces the blocked-port policy")
+    void testAllowlistStillEnforcesBlockedPorts() {
+        SsrfGuardValidatorImpl allowlisted = allowlisted("10.20.30.40:5432");
+        assertFalse(allowlisted.isUriPermitted(URI.create("http://10.20.30.40:5432/")));
+    }
+
+    @Test
+    @DisplayName("Permits normal public destinations unrelated to the allowlist")
+    void testPermitsNormalPublicDestinations() {
+        SsrfGuardValidatorImpl allowlisted = allowlisted("10.20.30.40:5000");
+        assertTrue(allowlisted.isUriPermitted(URI.create("https://93.184.216.34/payment")));
+        assertTrue(allowlisted.isUriPermitted(URI.create("http://151.101.1.140:8080/api")));
+    }
+
+    private static SsrfGuardValidatorImpl allowlisted(String... destinations) {
+        return new SsrfGuardValidatorImpl(List.of(), List.of(), false, List.of(destinations));
+    }
 }

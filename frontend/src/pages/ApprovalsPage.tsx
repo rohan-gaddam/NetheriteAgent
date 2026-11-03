@@ -286,11 +286,12 @@ export function ApprovalsPage() {
     const tab = activeTabRef.current;
 
     switch (event.type) {
-      case 'APPROVAL_CREATED': {
+      case 'APPROVAL_CREATED':
+      case 'APPROVAL_UPDATED': {
         if (tab === 'PENDING') {
           fetchApprovalsRef.current('PENDING');
         }
-        toast('New approval request pending', { icon: '\u23f3' });
+        if (event.type === 'APPROVAL_CREATED') toast('New approval request pending', { icon: '\u23f3' });
         break;
       }
       case 'APPROVAL_APPROVED':
@@ -326,7 +327,15 @@ export function ApprovalsPage() {
     }
   }, []);
 
-  const { connected } = useApprovalSSE({ onEvent: handleSSEEvent });
+  const handleSync = useCallback(() => {
+    fetchApprovalsRef.current(activeTabRef.current);
+    const dt = detailTicketRef.current;
+    if (dt) {
+      getApprovalTicket(dt.ticketId).then(setDetailTicket).catch(() => {});
+    }
+  }, []);
+
+  const { connected } = useApprovalSSE({ onEvent: handleSSEEvent, onSync: handleSync });
 
   useEffect(() => {
     fetchApprovals(activeTab);

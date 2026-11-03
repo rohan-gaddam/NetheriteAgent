@@ -13,6 +13,7 @@ import io.netherite.domain.entity.ResourceEntity;
 import io.netherite.domain.repository.ApprovalRequestRepository;
 import io.netherite.domain.service.AgentDomainService;
 import io.netherite.domain.service.ResourceDomainService;
+import io.netherite.routing.model.ResourceRoute;
 import io.netherite.routing.spi.ResourceRoutingService;
 import io.netherite.security.context.TenantContextHolder;
 import lombok.extern.slf4j.Slf4j;
@@ -38,7 +39,12 @@ public class ApprovalExecutionRunner {
     private final ResourceRoutingService resourceRoutingService;
     private final ApprovalEventPublisher eventPublisher;
     private final ConnectorExecutionService connectorExecutionService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    /**
+     * Spring Boot's auto-configured mapper. It must register {@code JavaTimeModule}: the ticket's
+     * stored action carries an {@code Instant timestamp}, which a bare {@code new ObjectMapper()}
+     * cannot deserialize into {@link CanonicalAction}.
+     */
+    private final ObjectMapper objectMapper;
 
     public ApprovalExecutionRunner(
             ApprovalRequestRepository approvalRequestRepository,
@@ -46,13 +52,15 @@ public class ApprovalExecutionRunner {
             ResourceDomainService resourceDomainService,
             ResourceRoutingService resourceRoutingService,
             ApprovalEventPublisher eventPublisher,
-            ConnectorExecutionService connectorExecutionService) {
+            ConnectorExecutionService connectorExecutionService,
+            ObjectMapper objectMapper) {
         this.approvalRequestRepository = approvalRequestRepository;
         this.agentDomainService = agentDomainService;
         this.resourceDomainService = resourceDomainService;
         this.resourceRoutingService = resourceRoutingService;
         this.eventPublisher = eventPublisher;
         this.connectorExecutionService = connectorExecutionService;
+        this.objectMapper = objectMapper;
     }
 
     @Async
@@ -104,10 +112,22 @@ public class ApprovalExecutionRunner {
                 return;
             }
 
+            // Resolve through the same trusted, tenant-scoped routing used by the
+            // initial execution. CanonicalAction.getTargetResource() is the resource
+            // NAME (gateway tickets store e.g. "SSELIVE_HIGH_API"), so parsing it
+            // as a UUID fails for every gateway-created ticket (IllegalArgument
+            // for names, NullPointer for missing values). The route carries the
+            // authoritative resource ID; an unresolvable route is terminal.
+            ResourceRoute route = resourceRoutingService.resolveRoute(originalAction).orElse(null);
+            if (route == null || route.getResourceId() == null) {
+                failDeterministic(ticketUuid, nodeId, orgId, "Target resource is no longer available");
+                return;
+            }
+
             UUID resourceUuid;
             try {
-                resourceUuid = UUID.fromString(originalAction.getTargetResource());
-            } catch (IllegalArgumentException e) {
+                resourceUuid = UUID.fromString(route.getResourceId());
+            } catch (IllegalArgumentException | NullPointerException e) {
                 failDeterministic(ticketUuid, nodeId, orgId, "Invalid target resource ID in original action");
                 return;
             }
@@ -127,7 +147,10 @@ public class ApprovalExecutionRunner {
 
             ConnectorExecutionResult result;
             try {
-                result = connectorExecutionService.execute(originalAction);
+                // The approved ticket authorises this exact action: the execution path re-validates
+                // the ticket (status, organization, action identity) and satisfies the
+                // HUMAN_APPROVAL gate from that prior decision instead of raising a new ticket.
+                result = connectorExecutionService.executeApproved(originalAction, ticketId);
             } catch (NetheriteException e) {
                 if (isTransient(e)) {
                     releaseTransient(ticketUuid, nodeId, orgId,

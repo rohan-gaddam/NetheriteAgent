@@ -1,5 +1,6 @@
 package io.netherite.connectors.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netherite.approval.model.ApprovalStatus;
 import io.netherite.approval.model.ApprovalTicket;
@@ -23,17 +24,22 @@ import io.netherite.policy.model.PolicyEvaluationResult;
 import io.netherite.policy.service.PolicyEvaluationService;
 import io.netherite.routing.model.ResourceRoute;
 import io.netherite.routing.spi.ResourceRoutingService;
+import io.netherite.security.key.CredentialEncryptionService;
+import io.netherite.common.context.TenantContext;
+import io.netherite.security.context.TenantContextHolder;
 import io.netherite.state.config.NetheriteDistributedProperties;
 import io.netherite.state.model.DistributedLock;
 import io.netherite.state.spi.DistributedLockManager;
 import io.netherite.state.spi.IdempotencyStore;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -65,6 +71,13 @@ public class ConnectorExecutionService {
     private final HealthCheckService healthCheckService;
     private final NetheriteDistributedProperties distributedProperties;
     private final ObjectMapper objectMapper;
+
+    /**
+     * Optional because the encryption key is injected externally. When a resource carries
+     * encrypted credentials and this dependency is absent, execution fails closed.
+     */
+    @Autowired(required = false)
+    private CredentialEncryptionService credentialEncryptionService;
 
     public ConnectorExecutionService(
             PolicyEvaluationService policyEvaluationService,
@@ -98,11 +111,61 @@ public class ConnectorExecutionService {
      * Executes an authorized action through the full Phase 6 security chain.
      */
     public ConnectorExecutionResult execute(CanonicalAction action) {
+        return executeInternal(action, null);
+    }
+
+    /**
+     * Executes the continuation of an already-APPROVED ticket. The ticket is the authorization:
+     * it must exist, be APPROVED, belong to the action's organization, and name exactly this
+     * action. Policy is still evaluated and a DENY decision still blocks; only the HUMAN_APPROVAL
+     * gate is treated as satisfied by the human's earlier decision. This is deliberately narrow -
+     * it does not create a general policy bypass, and it never creates a second approval ticket.
+     */
+    public ConnectorExecutionResult executeApproved(CanonicalAction action, String approvalTicketId) {
+        verifyApprovedTicket(action, approvalTicketId);
+        return executeInternal(action, approvalTicketId);
+    }
+
+    /**
+     * Fails closed unless the supplied ticket is a valid, human-issued authorization for exactly
+     * this action. Any mismatch - missing ticket, not APPROVED, wrong organization, or a different
+     * (or unreadable) canonical action - is rejected before anything is executed.
+     */
+    private void verifyApprovedTicket(CanonicalAction action, String approvalTicketId) {
+        if (approvalTicketId == null || approvalTicketId.isBlank()) {
+            throw new NetheriteException(SystemErrorCode.ERR_INVALID_PARAMETERS,
+                    "An approval ticket is required to execute an approved action");
+        }
+        ApprovalTicket ticket = approvalService.getTicket(approvalTicketId)
+                .orElseThrow(() -> new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_FOUND,
+                        "Approval ticket not found"));
+        if (ticket.getStatus() != ApprovalStatus.APPROVED) {
+            throw new NetheriteException(SystemErrorCode.ERR_FORBIDDEN,
+                    "Approval ticket is not in APPROVED state: " + ticket.getStatus());
+        }
+        if (!Objects.equals(ticket.getOrganizationId(), action.getOrganizationId())) {
+            throw new NetheriteException(SystemErrorCode.ERR_FORBIDDEN,
+                    "Approval ticket does not authorize this organization");
+        }
+        CanonicalAction approvedAction = ticket.getAction();
+        if (approvedAction == null || !Objects.equals(approvedAction, action)) {
+            throw new NetheriteException(SystemErrorCode.ERR_FORBIDDEN,
+                    "Approval ticket does not authorize this exact action");
+        }
+    }
+
+    private long elapsedMillis(long startNano) {
+        return (System.nanoTime() - startNano) / 1_000_000;
+    }
+
+    private ConnectorExecutionResult executeInternal(CanonicalAction action, String approvedTicketId) {
         long overallStart = System.nanoTime();
         String executionId = action.getActionId();
         String orgId = action.getOrganizationId();
+        String agentId = resolveAuthenticatedAgentId(action);
         String idempotencyKey = action.getIdempotencyKey();
         boolean hasIdempotencyKey = idempotencyKey != null && !idempotencyKey.isBlank();
+        String agentScopedKey = hasIdempotencyKey ? agentId + ":" + idempotencyKey : null;
 
         log.info("Starting Phase 6 execution {} for action '{}' on resource '{}'",
                 executionId, action.getActionType(), action.getTargetResource());
@@ -112,50 +175,76 @@ public class ConnectorExecutionService {
         try {
             decision = policyEvaluationService.evaluateDecision(action);
         } catch (NetheriteException e) {
-            auditEvent(orgId, executionId, action, DecisionType.DENY, null, null, System.nanoTime() - overallStart,
-                    "POLICY_EVALUATION_FAILED");
-            throw e;
+            NetheriteException withAudit = e;
+            try {
+                auditEventRequired(orgId, executionId, action, DecisionType.DENY, null, null, elapsedMillis(overallStart),
+                        "POLICY_EVALUATION_FAILED");
+            } catch (Exception auditEx) {
+                withAudit = new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_BOUND,
+                        "Policy evaluation failed: " + e.getMessage(), auditEx);
+            }
+            throw withAudit;
         }
 
         // Step 2: DENY -> stop + audit
         if (decision == DecisionType.DENY) {
             log.warn("Execution {} blocked by DENY decision", executionId);
-            auditEvent(orgId, executionId, action, DecisionType.DENY, null, null, System.nanoTime() - overallStart,
-                    "DENY");
+            try {
+                auditEventRequired(orgId, executionId, action, DecisionType.DENY, null, null, elapsedMillis(overallStart),
+                        "DENY");
+            } catch (Exception auditEx) {
+                throw new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_BOUND,
+                        "Policy decision prevents execution: DENY", auditEx);
+            }
             throw new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_BOUND,
                     "Policy decision prevents execution: DENY");
         }
 
-        // Step 3: HUMAN_APPROVAL -> create ticket + stop + audit
+        // Step 3: HUMAN_APPROVAL -> satisfy from an existing approval, otherwise create a ticket
         if (decision == DecisionType.HUMAN_APPROVAL) {
-            log.info("Execution {} requires human approval", executionId);
-            DecisionContext context = buildContext(action);
-            List<String> triggeredPolicies = List.of("base-policy");
-            ApprovalTicket ticket = approvalService.createTicket(context, triggeredPolicies);
+            if (approvedTicketId != null) {
+                // Continuation of an APPROVED ticket: the gate is already satisfied by the human's
+                // decision. Record it and continue - never create a duplicate approval ticket.
+                log.info("Execution {} authorized by existing approval ticket {}", executionId, approvedTicketId);
+                auditEvent(orgId, executionId, action, DecisionType.HUMAN_APPROVAL, null, null,
+                        elapsedMillis(overallStart), "HUMAN_APPROVAL_ALREADY_GRANTED");
+            } else {
+                log.info("Execution {} requires human approval", executionId);
+                DecisionContext context = buildContext(action);
+                List<String> triggeredPolicies = List.of("base-policy");
+                ApprovalTicket ticket = approvalService.createTicket(context, triggeredPolicies);
 
-            eventPublisher.publishEvent(orgId, "APPROVAL_CREATED", Map.of(
-                    "ticketId", ticket.getTicketId(),
-                    "actionType", action.getActionType(),
-                    "targetResource", action.getTargetResource(),
-                    "organizationId", orgId,
-                    "agentId", action.getAgentId(),
-                    "createdAt", ticket.getCreatedAt() != null ? ticket.getCreatedAt().toString() : java.time.Instant.now().toString()
-            ));
+                eventPublisher.publishEvent(orgId, "APPROVAL_CREATED", Map.of(
+                        "ticketId", ticket.getTicketId(),
+                        "actionType", action.getActionType(),
+                        "targetResource", action.getTargetResource(),
+                        "organizationId", orgId,
+                        "agentId", action.getAgentId(),
+                        "createdAt", ticket.getCreatedAt() != null ? ticket.getCreatedAt().toString() : java.time.Instant.now().toString()
+                ));
 
-            auditEvent(orgId, executionId, action, DecisionType.HUMAN_APPROVAL, null, null, System.nanoTime() - overallStart,
-                    "HUMAN_APPROVAL_REQUESTED");
-            throw new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_BOUND,
-                    "Action requires human approval. Ticket ID: " + ticket.getTicketId());
+                NetheriteException approvalRequired;
+                try {
+                    auditEventRequired(orgId, executionId, action, DecisionType.HUMAN_APPROVAL, null, null,
+                            elapsedMillis(overallStart), "HUMAN_APPROVAL_REQUESTED");
+                    approvalRequired = new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_BOUND,
+                            "Action requires human approval. Ticket ID: " + ticket.getTicketId());
+                } catch (Exception auditEx) {
+                    approvalRequired = new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_BOUND,
+                            "Action requires human approval. Ticket ID: " + ticket.getTicketId(), auditEx);
+                }
+                throw approvalRequired;
+            }
         }
 
         // Step 4: ALLOW -> idempotency check + atomic cluster-wide claim
         if (hasIdempotencyKey) {
-            Optional<IdempotencyStore.IdempotencyRecord> existing = idempotencyStore.getRecord(orgId, idempotencyKey);
+            Optional<IdempotencyStore.IdempotencyRecord> existing = idempotencyStore.getRecord(orgId, agentScopedKey);
             if (existing.isPresent()) {
                 IdempotencyStore.IdempotencyRecord record = existing.get();
                 if (record.state() == IdempotencyStore.IdempotencyState.COMPLETED) {
                     log.info("Execution {} idempotent replay - returning cached result", executionId);
-                    auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, System.nanoTime() - overallStart,
+                    auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, elapsedMillis(overallStart),
                             "IDEMPOTENT_REPLAY");
                     try {
                         return objectMapper.readValue(record.cachedResponseJson(), ConnectorExecutionResult.class);
@@ -167,24 +256,24 @@ public class ConnectorExecutionService {
                     }
                 } else if (record.state() == IdempotencyStore.IdempotencyState.PROCESSING) {
                     log.warn("Execution {} duplicate concurrent request rejected", executionId);
-                    auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, System.nanoTime() - overallStart,
+                    auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, elapsedMillis(overallStart),
                             "DUPLICATE_CONCURRENT_REJECTED");
                     throw new NetheriteException(SystemErrorCode.ERR_IDEMPOTENCY_CONFLICT,
                             "Duplicate request already processing under this idempotency key");
                 } else if (record.state() == IdempotencyStore.IdempotencyState.FAILED) {
                     log.warn("Execution {} rejected - idempotency key previously failed (short window active)", executionId);
-                    auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, System.nanoTime() - overallStart,
+                    auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, elapsedMillis(overallStart),
                             "DUPLICATE_PREVIOUS_FAILED");
                     throw new NetheriteException(SystemErrorCode.ERR_IDEMPOTENCY_CONFLICT,
                             "Idempotency key previously failed; retry after the failure window or use a new key");
                 }
             }
 
-            boolean claimed = idempotencyStore.tryClaim(orgId, idempotencyKey,
+            boolean claimed = idempotencyStore.tryClaim(orgId, agentScopedKey,
                     Duration.ofMinutes(distributedProperties.getIdempotency().getExecutionTtlMinutes()), executionId);
             if (!claimed) {
                 log.warn("Execution {} idempotency claim failed", executionId);
-                auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, System.nanoTime() - overallStart,
+                auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, elapsedMillis(overallStart),
                         "IDEMPOTENCY_CLAIM_FAILED");
                 throw new NetheriteException(SystemErrorCode.ERR_IDEMPOTENCY_CONFLICT,
                         "Failed to claim idempotency key - possible concurrent duplicate");
@@ -201,15 +290,15 @@ public class ConnectorExecutionService {
                         Duration.ofMillis(distributedProperties.getLock().getExecutionWaitMillis()),
                         Duration.ofMillis(distributedProperties.getLock().getExecutionLeaseMillis()));
             } catch (NetheriteException e) {
-                failIdempotency(orgId, idempotencyKey, hasIdempotencyKey);
-                auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, System.nanoTime() - overallStart,
+                failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+                auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, elapsedMillis(overallStart),
                         "DISTRIBUTED_DEPENDENCY_UNAVAILABLE");
                 throw e;
             }
             if (lockOpt.isEmpty()) {
                 log.warn("Execution {} failed to acquire lock", executionId);
-                failIdempotency(orgId, idempotencyKey, hasIdempotencyKey);
-                auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, System.nanoTime() - overallStart,
+                failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+                auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, elapsedMillis(overallStart),
                         "LOCK_ACQUISITION_FAILED");
                 throw new NetheriteException(SystemErrorCode.ERR_SYSTEM_UNAVAILABLE,
                         "Failed to acquire execution lock");
@@ -219,8 +308,8 @@ public class ConnectorExecutionService {
             // Step 6: Resolve resource route
             ResourceRoute route = resourceRoutingService.resolveRoute(action)
                     .orElseThrow(() -> {
-                        failIdempotency(orgId, idempotencyKey, hasIdempotencyKey);
-                        auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, System.nanoTime() - overallStart,
+                        failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+                        auditEvent(orgId, executionId, action, DecisionType.ALLOW, null, null, elapsedMillis(overallStart),
                                 "RESOURCE_NOT_FOUND");
                         return new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_FOUND,
                                 "Resource not found: " + action.getTargetResource());
@@ -230,8 +319,8 @@ public class ConnectorExecutionService {
             boolean bindingAuthorized = resourceRoutingService.isBindingAuthorized(
                     orgId, action.getAgentId(), route.getResourceId(), action.getActionType());
             if (!bindingAuthorized) {
-                failIdempotency(orgId, idempotencyKey, hasIdempotencyKey);
-                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, System.nanoTime() - overallStart,
+                failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, elapsedMillis(overallStart),
                         "BINDING_NOT_AUTHORIZED");
                 throw new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_BOUND,
                         "Agent is not authorized to access this resource");
@@ -240,8 +329,8 @@ public class ConnectorExecutionService {
             // Step 8: SSRF validation
             String baseUrl = route.getBaseUrl();
             if (baseUrl == null || baseUrl.isBlank()) {
-                failIdempotency(orgId, idempotencyKey, hasIdempotencyKey);
-                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, System.nanoTime() - overallStart,
+                failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, elapsedMillis(overallStart),
                         "SSRF_NO_BASE_URL");
                 throw new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_FOUND,
                         "Resource route has no configured base URL");
@@ -251,16 +340,16 @@ public class ConnectorExecutionService {
             try {
                 targetUri = URI.create(baseUrl);
             } catch (IllegalArgumentException e) {
-                failIdempotency(orgId, idempotencyKey, hasIdempotencyKey);
-                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, System.nanoTime() - overallStart,
+                failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, elapsedMillis(overallStart),
                         "SSRF_INVALID_URL");
                 throw new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_FOUND,
                         "Resource has an invalid base URL configuration");
             }
 
             if (!ssrfGuardValidator.isUriPermitted(targetUri)) {
-                failIdempotency(orgId, idempotencyKey, hasIdempotencyKey);
-                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, System.nanoTime() - overallStart,
+                failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, elapsedMillis(overallStart),
                         "SSRF_BLOCKED");
                 throw new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_BOUND,
                         "Destination URL failed SSRF validation");
@@ -269,8 +358,8 @@ public class ConnectorExecutionService {
             // Step 9: Select connector
             ResourceConnector connector = selectConnector(route.getConnectorType());
             if (connector == null) {
-                failIdempotency(orgId, idempotencyKey, hasIdempotencyKey);
-                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, System.nanoTime() - overallStart,
+                failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+                auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, elapsedMillis(overallStart),
                         "NO_CONNECTOR_AVAILABLE");
                 throw new NetheriteException(SystemErrorCode.ERR_RESOURCE_NOT_FOUND,
                         "No connector available for type: " + route.getConnectorType());
@@ -279,21 +368,30 @@ public class ConnectorExecutionService {
             // Step 10: Build execution request with trusted data only.
             // The idempotency key is propagated so compliant external systems can deduplicate
             // a re-sent execution after a crash-recovery retry.
-            ConnectorExecutionRequest executionRequest = ConnectorExecutionRequest.builder()
+            // Credentials are decrypted server-side here - after the binding has been
+            // authorized and immediately before connector execution - and are never accepted
+            // from the client request or returned to it.
+            Map<String, String> resolvedCredentials =
+                    resolveCredentials(orgId, agentScopedKey, hasIdempotencyKey, executionId, action, route, overallStart);
+
+            var builder = ConnectorExecutionRequest.builder()
                     .executionId(executionId)
                     .idempotencyKey(hasIdempotencyKey ? idempotencyKey : null)
                     .action(action)
                     .route(route)
-                    .timeoutMillis(30000)
-                    .build();
+                    .resolvedCredentials(resolvedCredentials)
+                    .timeoutMillis(30000);
 
-            // Step 11: Execute
+            ConnectorExecutionRequest executionRequest = builder.build();
+
+            // Step 11: Execute - fail-closed: if the EXECUTION_STARTED audit record cannot be
+            // persisted, the connector is never invoked.
             log.info("Executing {} via connector '{}' against resource '{}'",
                     executionId, connector.getConnectorType(), route.getResourceName());
-            auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null, 0, "EXECUTION_STARTED");
+            auditEventRequired(orgId, executionId, action, DecisionType.ALLOW, route, null, 0, "EXECUTION_STARTED");
 
             ConnectorExecutionResult result = connector.execute(executionRequest);
-            long execDuration = (System.nanoTime() - overallStart) / 1_000_000;
+            long execDuration = elapsedMillis(overallStart);
 
             // Step 12: Audit result + update resource health
             if (result.isSuccessful()) {
@@ -325,13 +423,13 @@ public class ConnectorExecutionService {
                 if (result.isSuccessful()) {
                     try {
                         String resultJson = objectMapper.writeValueAsString(result);
-                        idempotencyStore.markCompleted(orgId, idempotencyKey, resultJson,
+                        idempotencyStore.markCompleted(orgId, agentScopedKey, resultJson,
                                 Duration.ofMinutes(distributedProperties.getIdempotency().getCompletedTtlMinutes()));
                     } catch (Exception e) {
                         log.warn("Failed to mark idempotency completed: {}", e.getMessage());
                     }
                 } else {
-                    failIdempotency(orgId, idempotencyKey, true);
+                    failIdempotency(orgId, agentScopedKey, true);
                 }
             }
 
@@ -348,6 +446,47 @@ public class ConnectorExecutionService {
         }
     }
 
+    /**
+     * Decrypts the resource's stored credential record and returns it only after the
+     * binding has already been authorized. Any missing key, malformed ciphertext, or
+     * unreadable credential document fails closed before the connector is invoked.
+     */
+    private Map<String, String> resolveCredentials(String orgId, String agentScopedKey,
+                                                   boolean hasIdempotencyKey, String executionId,
+                                                   CanonicalAction action, ResourceRoute route,
+                                                   long overallStart) {
+        String encrypted = route.getCredentialReference();
+        if (encrypted == null || encrypted.isBlank()) {
+            return null;
+        }
+
+        if (credentialEncryptionService == null) {
+            failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+            auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null,
+                    elapsedMillis(overallStart), "CREDENTIAL_RESOLUTION_FAILED");
+            throw new NetheriteException(SystemErrorCode.ERR_SYSTEM_UNAVAILABLE,
+                    "Credential encryption is not configured for this resource");
+        }
+
+        try {
+            String plaintext = credentialEncryptionService.decrypt(encrypted);
+            Map<String, String> credentials = objectMapper.readValue(
+                    plaintext, new TypeReference<Map<String, String>>() { });
+            if (credentials == null || credentials.isEmpty()) {
+                throw new IllegalArgumentException("Credential record is empty");
+            }
+            return credentials;
+        } catch (Exception e) {
+            failIdempotency(orgId, agentScopedKey, hasIdempotencyKey);
+            log.warn("Failed to resolve credentials for resource route '{}' - failing closed",
+                    route.getResourceName());
+            auditEvent(orgId, executionId, action, DecisionType.ALLOW, route, null,
+                    elapsedMillis(overallStart), "CREDENTIAL_RESOLUTION_FAILED");
+            throw new NetheriteException(SystemErrorCode.ERR_SYSTEM_UNAVAILABLE,
+                    "Failed to resolve credentials for resource route", e);
+        }
+    }
+
     private void failIdempotency(String orgId, String idempotencyKey, boolean hasIdempotencyKey) {
         if (!hasIdempotencyKey) {
             return;
@@ -357,6 +496,45 @@ public class ConnectorExecutionService {
                     Duration.ofSeconds(distributedProperties.getIdempotency().getFailedTtlSeconds()));
         } catch (Exception e) {
             log.warn("Failed to mark idempotency {} failed: {}", idempotencyKey, e.getMessage());
+        }
+    }
+
+    /**
+     * Records an audit event on an execution-critical path. If persistence fails, the
+     * exception is thrown so the caller can fail closed (e.g. never invoke the connector
+     * when EXECUTION_STARTED cannot be durably recorded).
+     */
+    private void auditEventRequired(String orgId, String requestId, CanonicalAction action,
+                                   DecisionType decision, ResourceRoute route,
+                                   ConnectorExecutionResult result, long durationMs, String eventType) {
+        try {
+            Map<String, Object> params = dataRedactionService.redactParameters(orgId,
+                    action.getParameters() != null ? action.getParameters() : Map.of());
+
+            Map<String, Object> redactedResult = null;
+            if (result != null && result.getResponseBody() != null) {
+                redactedResult = dataRedactionService.redactResult(orgId, result.getResponseBody());
+            }
+
+            AuditRecord record = AuditRecord.builder()
+                    .organizationId(orgId)
+                    .requestId(requestId)
+                    .eventType(eventType)
+                    .agentId(action.getAgentId())
+                    .userId(action.getUserId())
+                    .actionType(action.getActionType())
+                    .targetResource(action.getTargetResource())
+                    .decision(decision)
+                    .redactedParameters(params)
+                    .redactedExecutionResult(redactedResult)
+                    .executionDurationMillis(durationMs)
+                    .build();
+
+            auditService.record(record);
+        } catch (Exception e) {
+            log.error("Failed to record audit event {}: {}", eventType, e.getMessage());
+            throw new NetheriteException(SystemErrorCode.ERR_SYSTEM_UNAVAILABLE,
+                    "Failed to record audit event " + eventType, e);
         }
     }
 
@@ -390,6 +568,19 @@ public class ConnectorExecutionService {
         } catch (Exception e) {
             log.error("Failed to record audit event {}: {}", eventType, e.getMessage());
         }
+    }
+
+    /**
+     * Resolves the agent identity from the authenticated execution context
+     * ({@link TenantContextHolder}), never from an untrusted request field. Falls back to
+     * the action's agentId only when no security context is active (e.g. unit tests).
+     */
+    private String resolveAuthenticatedAgentId(CanonicalAction action) {
+        TenantContext context = TenantContextHolder.getContext();
+        if (context != null && context.getAgentId() != null && !context.getAgentId().isBlank()) {
+            return context.getAgentId();
+        }
+        return action.getAgentId();
     }
 
     private DecisionContext buildContext(CanonicalAction action) {

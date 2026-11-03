@@ -73,6 +73,8 @@ secrets:
     file: ./secrets/gemini_api_key
   openrouter_api_key:
     file: ./secrets/openrouter_api_key
+  credential_encryption_key:
+    file: ./secrets/credential_encryption_key
 
 
 # WS8: bounded json-file log retention/size for every service â€” at most 3 files of
@@ -305,6 +307,8 @@ services:
       LOGGING_LEVEL_IO_NETHERITE_STATE: ${LOG_LEVEL_STATE:-INFO}
       # WS8: production emits one JSON structured log line per event.
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-structured}
+      SSRF_GUARD_ALLOWED_PRIVATE_DESTINATIONS: ${SSRF_GUARD_ALLOWED_PRIVATE_DESTINATIONS:-host.docker.internal:5080}
+      NETHERITE_SECURITY_SSRF_GUARD_ALLOWED_PRIVATE_DESTINATIONS: ${NETHERITE_SECURITY_SSRF_GUARD_ALLOWED_PRIVATE_DESTINATIONS:-host.docker.internal:5080}
     secrets:
       - db_app_password
       - redis_password
@@ -312,6 +316,7 @@ services:
       - opa_policy_token
       - gemini_api_key
       - openrouter_api_key
+      - credential_encryption_key
     networks: [netherite_net]
     # Runtime hardening: read-only rootfs (JVM needs only a writable /tmp), no
     # Linux capabilities, no privilege elevation, PID-1 init. The app image

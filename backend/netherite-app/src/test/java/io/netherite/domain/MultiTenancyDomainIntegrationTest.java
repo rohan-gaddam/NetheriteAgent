@@ -196,6 +196,32 @@ class MultiTenancyDomainIntegrationTest {
     }
 
     @Test
+    @DisplayName("5b. An empty binding allow-list fails closed (no implicit allow-all)")
+    void testEmptyBindingAllowListDeniesAllActions() {
+        AgentDomainService.AgentRegistrationResult agentRes = agentService.registerAgent(
+                orgA.getId(),
+                "EmptyBindingAgent",
+                "Agent with an empty allow-list",
+                "TIER_1"
+        );
+        ResourceEntity resource = resourceService.createResource(
+                orgA.getId(),
+                "EmptyBindingResource",
+                ConnectorType.HTTP_REST,
+                "https://api.example.com",
+                null,
+                SensitivityLevel.LOW,
+                "Empty binding resource"
+        );
+
+        bindingService.bindAgentToResource(
+                orgA.getId(), agentRes.agent().getId(), resource.getId(), List.of());
+
+        assertThat(bindingService.isActionAuthorized(
+                orgA.getId(), agentRes.agent().getId(), resource.getId(), "PAYMENT:QUERY")).isFalse();
+    }
+
+    @Test
     @DisplayName("6. Security Boundary: Strict cross-tenant access rejection")
     void testCrossTenantAccessRejection() {
         // Create Agent and Resource in Org A

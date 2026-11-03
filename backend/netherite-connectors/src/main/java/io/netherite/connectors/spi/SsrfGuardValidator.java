@@ -15,6 +15,14 @@ public interface SsrfGuardValidator {
     boolean isUriPermitted(URI targetUri);
 
     /**
+     * Validates whether the given URI is permitted for outbound connection for a specific resource.
+     * Supports narrowly scoped administrator-configured destination exceptions for private enterprise systems.
+     */
+    default boolean isUriPermitted(URI targetUri, String resourceName) {
+        return isUriPermitted(targetUri);
+    }
+
+    /**
      * Validates a destination that is configured by the control-plane operator (OIDC endpoints,
      * OPA, notification webhooks). Implementations may permit private-network destinations for
      * these trusted, operator-configured endpoints whereas {@link #isUriPermitted} stays strict.

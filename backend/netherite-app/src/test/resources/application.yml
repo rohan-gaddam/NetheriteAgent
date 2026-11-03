@@ -47,15 +47,15 @@ netherite:
     provider: none
   auth:
     owner:
-      # Test fixture BCrypt hash for a disposable test-only password (see
-      # OwnerAuthenticationTest OWNER_PASSWORD), pinned here so the
+      # Test fixture BCrypt hash (password "Fakepassword@26"), pinned here so the
       # test profile is self-contained. The PRODUCTION application.yml has NO baked
       # hash: OWNER_PASSWORD_HASH must come from the container secret mechanism.
-      email: ${OWNER_EMAIL:owner@example.com}
+      email: ${OWNER_EMAIL:strangeunknown03@gmail.com}
       password-hash: $2b$10$C9A8I18DD6SzKhOnjxE49.beH6hGJjswSSeS5ci3AlfNGkkqfkzuy
       organization-name: NetheriteAgent Test
       organization-slug: netherite-test
   security:
+    credential-encryption-key: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="
     ssrf-guard:
       enabled: true
       blocked-cidrs:

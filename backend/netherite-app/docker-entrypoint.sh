@@ -49,4 +49,12 @@ require_secret redis_password REDIS_PASSWORD
 require_secret owner_password_hash OWNER_PASSWORD_HASH
 require_secret opa_policy_token OPA_TOKEN
 
+if [ -r "${SECRETS_DIR}/credential_encryption_key" ]; then
+    credential_key="$(cat "${SECRETS_DIR}/credential_encryption_key" 2>/dev/null || true)"
+    if [ -n "$credential_key" ]; then
+        export CREDENTIAL_ENCRYPTION_KEY="$credential_key"
+    fi
+    unset credential_key
+fi
+
 exec java -XX:MaxRAMPercentage=70 -jar /opt/netherite/app.jar "$@"

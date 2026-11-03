@@ -81,7 +81,9 @@ public class BindingDomainService {
 
         List<String> allowed = bindingOpt.get().getAllowedActions();
         if (allowed == null || allowed.isEmpty()) {
-            return true; // No action restrictions configured on binding
+            // Fail closed: an empty allow-list means the binding grants no actions.
+            // This matches DbRegisteredActionCatalog and prevents an implicit "allow all".
+            return false;
         }
 
         return allowed.contains("*") || allowed.contains(actionType);

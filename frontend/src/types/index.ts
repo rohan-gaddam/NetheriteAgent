@@ -1,6 +1,6 @@
 export type DecisionType = 'ALLOW' | 'DENY' | 'HUMAN_APPROVAL';
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED';
-export type ConnectorType = 'HTTP_REST' | 'GRAPHQL' | 'MCP' | 'GRPC';
+export type ConnectorType = 'HTTP_REST' | 'ERPNEXT' | 'GRAPHQL' | 'MCP' | 'GRPC' | 'AI_ERP';
 export type SensitivityLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface ActionIngestionRequest {

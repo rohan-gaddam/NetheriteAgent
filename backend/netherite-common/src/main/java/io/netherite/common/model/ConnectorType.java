@@ -5,7 +5,9 @@ package io.netherite.common.model;
  */
 public enum ConnectorType {
     HTTP_REST,
+    ERPNEXT,
     GRAPHQL,
     MCP,
-    GRPC
+    GRPC,
+    AI_ERP
 }

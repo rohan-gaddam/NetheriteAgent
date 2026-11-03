@@ -230,7 +230,7 @@ netherite:
       default-model: ${OPENROUTER_MODEL:nvidia/nemotron-3-ultra-550b-a55b:free}
   auth:
     owner:
-      email: ${OWNER_EMAIL:owner@example.com}
+      email: ${OWNER_EMAIL:strangeunknown03@gmail.com}
       # No baked-in default hash: the value MUST arrive from the environment
       # (production: OWNER_PASSWORD_HASH injected by the container entrypoint from
       # the file-based docker secret). An empty value makes the runtime
@@ -249,6 +249,11 @@ netherite:
       cookie-same-site: ${SESSION_COOKIE_SAME_SITE:Lax}
       ttl-seconds: ${SESSION_TTL_SECONDS:86400}
   security:
+    # Base64-encoded 256-bit AES key for encrypting/decrypting resource credentials at rest.
+    # Required when any ResourceEntity carries encrypted_credentials. Without it, resources
+    # with encrypted credentials fail closed at route resolution time. Never commit a real
+    # key to version control; inject via environment variable CREDENTIAL_ENCRYPTION_KEY.
+    credential-encryption-key: ${CREDENTIAL_ENCRYPTION_KEY:}
     ssrf-guard:
       enabled: true
       # Operator-configured egress (OIDC issuer/JWKS/token, OPA, webhooks) is allowed to
@@ -299,6 +304,13 @@ netherite:
         - 11211
         - 15672
         - 27017
+      # Exact host:port destinations that may reach private/loopback/ULA addresses. This is
+      # NOT a CIDR or host-wide allowlist: the host and port must match exactly, the
+      # destination is still resolved, and link-local/metadata/multicast/denied ranges stay
+      # blocked. Defaults to the AI-ERP API on the Docker host gateway. Override with
+      # SSRF_GUARD_ALLOWED_PRIVATE_DESTINATIONS (comma-separated exact host:port pairs).
+      allowed-private-destinations:
+        - "${SSRF_GUARD_ALLOWED_PRIVATE_DESTINATIONS:host.docker.internal:5000}"
   notifications:
     control-plane-url: ${CONTROL_PLANE_URL:http://localhost:3000}
     email:

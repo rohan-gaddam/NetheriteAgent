@@ -17,5 +17,7 @@ public interface ResourceRepository extends JpaRepository<ResourceEntity, UUID> 
 
     Optional<ResourceEntity> findByNameAndOrganizationId(String name, UUID organizationId);
 
+    Optional<ResourceEntity> findByNameIgnoreCaseAndOrganizationId(String name, UUID organizationId);
+
     boolean existsByIdAndOrganizationId(UUID id, UUID organizationId);
 }

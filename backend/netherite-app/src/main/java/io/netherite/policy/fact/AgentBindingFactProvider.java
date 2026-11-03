@@ -1,6 +1,7 @@
 package io.netherite.policy.fact;
 
 import io.netherite.common.model.CanonicalAction;
+import io.netherite.connectors.aierp.AiErpActionDefinitionRegistry;
 import io.netherite.context.spi.FactProvider;
 import io.netherite.domain.entity.AgentEntity;
 import io.netherite.domain.entity.AgentResourceBindingEntity;
@@ -28,6 +29,7 @@ public class AgentBindingFactProvider implements FactProvider {
     private final AgentRepository agentRepository;
     private final AgentResourceBindingRepository bindingRepository;
     private final ResourceRepository resourceRepository;
+    private final AiErpActionDefinitionRegistry actionDefinitionRegistry;
 
     @Override
     public String getProviderId() {
@@ -37,7 +39,7 @@ public class AgentBindingFactProvider implements FactProvider {
     @Override
     public Set<String> getSupportedFactKeys() {
         return Set.of("agentTrustTier", "agentStatus", "isBound", "resourceExists",
-                "allowedActions", "bindingActive", "resourceSensitivity", "riskScore");
+                "allowedActions", "bindingActive", "resourceSensitivity", "actionSensitivity", "riskScore");
     }
 
     @Override
@@ -58,42 +60,77 @@ public class AgentBindingFactProvider implements FactProvider {
             });
         }
 
+        ResourceEntity resource = resourceRepository.findAllByOrganizationId(orgId).stream()
+                .filter(r -> r.getName() != null && r.getName().equalsIgnoreCase(action.getTargetResource()))
+                .findFirst()
+                .orElse(null);
+
         if (requestedKeys.contains("resourceExists")) {
-            boolean exists = resourceRepository.findAllByOrganizationId(orgId).stream()
-                    .anyMatch(r -> r.getName().equalsIgnoreCase(action.getTargetResource()));
-            facts.put("resourceExists", exists);
+            facts.put("resourceExists", resource != null);
         }
 
         if (requestedKeys.contains("isBound") || requestedKeys.contains("allowedActions")
                 || requestedKeys.contains("bindingActive")) {
-            bindingRepository.findAllByOrganizationId(orgId).stream()
-                    .filter(b -> b.getAgentId().equals(agentId))
-                    .findFirst()
-                    .ifPresent(binding -> {
-                        facts.put("isBound", true);
-                        facts.put("bindingActive", binding.isActive());
-                        facts.put("allowedActions", binding.getAllowedActions());
-                    });
+            if (resource != null) {
+                bindingRepository.findByOrganizationIdAndAgentIdAndResourceId(orgId, agentId, resource.getId())
+                        .ifPresent(binding -> {
+                            facts.put("isBound", true);
+                            facts.put("bindingActive", binding.isActive());
+                            facts.put("allowedActions", binding.getAllowedActions());
+                        });
+            }
         }
 
         if (requestedKeys.contains("resourceSensitivity") || requestedKeys.contains("riskScore")) {
-            resourceRepository.findAllByOrganizationId(orgId).stream()
-                    .filter(r -> r.getName().equalsIgnoreCase(action.getTargetResource()))
-                    .findFirst()
-                    .ifPresent(r -> {
-                        facts.put("resourceSensitivity", r.getSensitivityLevel().name());
-                        sensor.sensitivity = r.getSensitivityLevel().name();
+            if (resource != null && resource.getSensitivityLevel() != null) {
+                facts.put("resourceSensitivity", resource.getSensitivityLevel().name());
+                sensor.sensitivity = resource.getSensitivityLevel().name();
+            }
+
+            actionDefinitionRegistry.findDefinition(action.getActionType())
+                    .map(definition -> definition.getSensitivityLevel())
+                    .filter(java.util.Objects::nonNull)
+                    .ifPresent(level -> {
+                        facts.put("actionSensitivity", level.name());
+                        sensor.actionSensitivity = level.name();
                     });
         }
 
         if (requestedKeys.contains("riskScore")) {
             // Deterministic, server-side risk score derived solely from trusted control-plane
-            // state (resource sensitivity + agent trust tier + agent status). Client input is
-            // never consulted. The value feeds the Rego risk gates (<50 ALLOW, >=50 approval).
+            // state (resource + action sensitivity, agent trust tier, agent status). Client
+            // input is never consulted. The action's registered sensitivity is part of the
+            // maximum so a low-sensitivity resource cannot downgrade a high-risk operation
+            // (e.g. DELETE_RECORD/CRITICAL) into an automatic ALLOW.
+            sensor.sensitivity = maxSensitivity(sensor.sensitivity, sensor.actionSensitivity);
             facts.put("riskScore", computeRiskScore(sensor.sensitivity, sensor.trustTier, sensor.status));
         }
 
         return CompletableFuture.completedFuture(facts);
+    }
+
+    /**
+     * Returns the higher of two sensitivity labels; an unknown/missing value never
+     * lowers a known one. Comparison is by the fixed severity order used by risk scoring.
+     */
+    static String maxSensitivity(String first, String second) {
+        if (first == null) {
+            return second;
+        }
+        if (second == null) {
+            return first;
+        }
+        return sensitivityRank(first) >= sensitivityRank(second) ? first : second;
+    }
+
+    private static int sensitivityRank(String sensitivity) {
+        return switch (sensitivity == null ? "" : sensitivity.toUpperCase()) {
+            case "LOW" -> 1;
+            case "MEDIUM" -> 2;
+            case "HIGH" -> 3;
+            case "CRITICAL" -> 4;
+            default -> 0;
+        };
     }
 
     /**
@@ -130,6 +167,7 @@ public class AgentBindingFactProvider implements FactProvider {
 
     private static final class SensorFacts {
         private String sensitivity;
+        private String actionSensitivity;
         private String trustTier;
         private String status;
         private SensorFacts() {

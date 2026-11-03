@@ -43,6 +43,15 @@ printf '%s' ''                    > "$SECRETS_DIR/gemini_api_key"
 # openrouter_api_key likewise: declared by compose, read only when
 # LLM_PROVIDER=openrouter. Empty is the correct default.
 printf '%s' ''                    > "$SECRETS_DIR/openrouter_api_key"
+# credential_encryption_key: 32-byte AES key (Base64) for credential encryption at rest.
+# CRITICAL: Generated ONLY if the file does not already exist. Never overwrite an existing key.
+if [ ! -f "$SECRETS_DIR/credential_encryption_key" ]; then
+    CREDENTIAL_KEY="$(head -c 32 /dev/urandom | base64)"
+    printf '%s' "$CREDENTIAL_KEY" > "$SECRETS_DIR/credential_encryption_key"
+    KEY_STATUS="generated 32-byte AES key (Base64)"
+else
+    KEY_STATUS="preserved existing key (never overwritten)"
+fi
 
 echo "Secrets provisioned (no trailing newline, no BOM, 0600):"
 echo "  $SECRETS_DIR/db_password          (${#DB_PASSWORD} hex chars, netherite_admin / migrate)"
@@ -50,6 +59,7 @@ echo "  $SECRETS_DIR/db_app_password      (${#DB_APP_PASSWORD} hex chars, nether
 echo "  $SECRETS_DIR/redis_password       (${#REDIS_PASSWORD} hex chars)"
 echo "  $SECRETS_DIR/opa_policy_token     (${#OPA_POLICY_TOKEN} hex chars, OPA bearer authorization)"
 echo "  $SECRETS_DIR/owner_password_hash  (BCrypt \$10)"
+echo "  $SECRETS_DIR/credential_encryption_key ($KEY_STATUS)"
 echo "  $SECRETS_DIR/gemini_api_key       (EMPTY - add a real key only for LLM_PROVIDER=gemini)"
 echo "  $SECRETS_DIR/openrouter_api_key    (EMPTY - add a real key only for LLM_PROVIDER=openrouter)"
 echo "Next: docker compose run --rm migrate   then   docker compose up -d --scale app=2"

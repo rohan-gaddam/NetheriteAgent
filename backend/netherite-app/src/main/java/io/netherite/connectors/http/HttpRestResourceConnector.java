@@ -5,7 +5,8 @@ import io.netherite.connectors.model.ConnectorExecutionRequest;
 import io.netherite.connectors.model.ConnectorExecutionResult;
 import io.netherite.connectors.spi.ResourceConnector;
 import io.netherite.connectors.spi.SsrfGuardValidator;
-import io.netherite.support.http.NoRedirectSimpleClientHttpRequestFactory;
+import io.netherite.routing.model.ResourceRoute;
+import io.netherite.support.http.NoRedirectJdkClientHttpRequestFactory;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -19,6 +20,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -36,9 +38,8 @@ public class HttpRestResourceConnector implements ResourceConnector {
 
     public HttpRestResourceConnector(SsrfGuardValidator ssrfGuardValidator) {
         this.ssrfGuardValidator = ssrfGuardValidator;
-        NoRedirectSimpleClientHttpRequestFactory factory = new NoRedirectSimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(5000);
-        factory.setReadTimeout(30000);
+        NoRedirectJdkClientHttpRequestFactory factory =
+                new NoRedirectJdkClientHttpRequestFactory(Duration.ofSeconds(5), Duration.ofSeconds(30));
         // Redirects are never followed: a redirect could land off the SSRF-validated host
         this.restTemplate = new RestTemplate(factory);
     }
@@ -101,9 +102,19 @@ public class HttpRestResourceConnector implements ResourceConnector {
             Map<String, Object> body = request.getAction().getParameters();
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body != null ? body : Map.of(), headers);
 
+            HttpMethod httpMethod = resolveHttpMethod(request.getRoute());
+            if (httpMethod == null) {
+                long durationMs = (System.nanoTime() - start) / 1_000_000;
+                return ConnectorExecutionResult.builder()
+                        .successful(false)
+                        .errorMessage("Unrecognized HTTP method on resource route")
+                        .executionDurationMillis(durationMs)
+                        .build();
+            }
+
             ResponseEntity<Map> response = restTemplate.exchange(
                     targetUrl,
-                    HttpMethod.POST,
+                    httpMethod,
                     entity,
                     Map.class);
 
@@ -175,6 +186,28 @@ public class HttpRestResourceConnector implements ResourceConnector {
             log.error("Failed to validate URL against registered resource: {}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Resolves the HTTP method for a connector request from the registered resource route.
+     * Defaults to POST when no method is configured. Fails closed (returns null) for any
+     * method value that Spring's {@link HttpMethod} does not recognize, so an operator
+     * cannot route a connector through an arbitrary or dangerous HTTP verb.
+     */
+    private HttpMethod resolveHttpMethod(ResourceRoute route) {
+        String method = route == null ? null : route.getHttpMethod();
+        if (method == null || method.isBlank()) {
+            return HttpMethod.POST;
+        }
+        String upper = method.trim().toUpperCase();
+        for (HttpMethod m : HttpMethod.values()) {
+            if (m.name().equals(upper)) {
+                return m;
+            }
+        }
+        log.warn("Rejecting unrecognized HTTP method '{}' on resource '{}'", method,
+                route == null ? null : route.getResourceName());
+        return null;
     }
 
     private HttpHeaders createHeaders(ConnectorExecutionRequest request) {

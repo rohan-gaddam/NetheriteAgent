@@ -15,12 +15,14 @@ ledger), `production-deployment.md`, `local-development.md`, `ci-cd.md`,
 
 | Data | Location | Recoverability |
 |---|---|---|
-| Organizations, users, sessions, audit records, approvals, agents, idempotency | **PostgreSQL** (`netherite` DB, volume `pgdata`) | **Backup + restore scripts in this document** |
+| Organizations, users, sessions, audit records, approvals, agents, idempotency, encrypted credentials | **PostgreSQL** (`netherite` DB, volume `pgdata`) | **Backup + restore scripts in this document** (stored credentials require matching encryption key) |
+| Credential encryption key | **Vault** / `infrastructure/docker/secrets/credential_encryption_key` | **Vault backup** — never stored in DB dump; key loss makes all stored ciphertext permanently unreadable |
 | Distributed locks, rate-limit counters, leader heartbeat | **Redis** (volume `redisdata`, AOF everysec) | Reconstructible — see §8; **do not snapshot-restore Redis** |
 | Structured logs, security events | Docker `json-file` logs | 50 MB × 3 per service (bounded, WS8) |
 
-Everything durable lives in PostgreSQL. Redis holds only TTL-bounded transient
-coordination, so Redis recovery is "start empty", never "restore a snapshot".
+Everything durable lives in PostgreSQL, with ciphertext credentials additionally dependent on the
+independently vaulted encryption key. Redis holds only TTL-bounded transient coordination, so Redis
+recovery is "start empty", never "restore a snapshot".
 
 ## 2. Recovery objectives (PROPOSED — require owner approval)
 
@@ -230,10 +232,30 @@ last-write status ok → opa health endpoint → app reachable end-to-end via Ca
 
 - [ ] Chosen backup validated (`VALIDATED`, exit 0) against its manifest
 - [ ] Disposable drill completed (restore + all verification lines PASS)
+- [ ] Credential encryption key verified in vault and matching restored ciphertext
 - [ ] `migrate` re-run clean; Flyway history matches restored schema
 - [ ] ops-checks all PASS (exit 0)
 - [ ] Backup set refreshed; retention re-run and reviewed
 - [ ] Owner records the incident + effective RTO/RPO in the ledger
+
+### 9.1 Credential Encryption Key Recovery & Vault Synchronization
+
+Starting in Phase 5G/5I, resource credentials are encrypted at rest with AES-256-GCM.
+PostgreSQL database dumps store only ciphertext (`resources.encrypted_credentials`).
+
+- **Vault Custody**: The 32-byte Base64 key in `infrastructure/docker/secrets/credential_encryption_key`
+  must be vaulted externally in an encrypted secret store (e.g. HashiCorp Vault, AWS Secrets Manager,
+  or an organization password manager) **at generation time**.
+- **Backup Synchronization**: Whenever a database backup is taken via `netherite-backup.ps1`, the
+  operator must ensure the current encryption key is preserved in the vault alongside the backup catalog.
+- **Key Loss Consequences**: If the encryption key is lost, database backups **cannot** restore credential
+  access. All credentials must be manually re-registered and re-encrypted.
+- **Key Overwrite Hazard**: Never overwrite an existing key file. `generate-secrets.ps1` preserves an
+  existing key. Generating a new key invalidates all previously encrypted records.
+- **Disaster Recovery Drill**: During full site recovery, the key must be placed at
+  `infrastructure/docker/secrets/credential_encryption_key` (permissions 0600) before starting `app`.
+  If the key is omitted, the app starts and non-credential resources operate, but credentialed resources
+  fail closed with `503 ERR_SYSTEM_UNAVAILABLE`.
 
 ## 10. Operators tests (regression for the tooling)
 

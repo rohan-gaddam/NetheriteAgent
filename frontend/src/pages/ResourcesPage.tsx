@@ -97,7 +97,7 @@ function ResourceDetail({ resource, onBack, onRefresh }: { resource: Resource; o
                 <input type="text" value={editBaseUrl} onChange={e => setEditBaseUrl(e.target.value)} className="w-full px-3 py-2 bg-slate-950/60 border border-slate-700 rounded-lg text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-cyan-400/40 focus:border-cyan-400/70" /></div>
               <div><label className="block text-xs font-medium text-slate-400 mb-1.5">Connector Type</label>
                 <select value={editConnector} onChange={e => setEditConnector(e.target.value as ConnectorType)} className="w-full px-3 py-2 bg-slate-950/60 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-400/40 focus:border-cyan-400/70">
-                  <option value="HTTP_REST">HTTP REST</option><option value="GRAPHQL">GraphQL</option><option value="MCP">MCP</option><option value="GRPC">gRPC</option>
+                  <option value="HTTP_REST">HTTP REST</option><option value="AI_ERP">AI-ERP</option><option value="ERPNEXT">ERPNext</option><option value="GRAPHQL">GraphQL</option><option value="MCP">MCP</option><option value="GRPC">gRPC</option>
                 </select></div>
               <div><label className="block text-xs font-medium text-slate-400 mb-1.5">Sensitivity</label>
                 <select value={editSensitivity} onChange={e => setEditSensitivity(e.target.value as SensitivityLevel)} className="w-full px-3 py-2 bg-slate-950/60 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-400/40 focus:border-cyan-400/70">
@@ -252,7 +252,7 @@ export function ResourcesPage() {
               <div><label className="block text-xs font-medium text-slate-400 mb-1.5">Connector Type</label>
                 <select value={createConnector} onChange={e => setCreateConnector(e.target.value as ConnectorType)}
                   className="w-full px-3 py-2 bg-slate-950/60 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-400/40 focus:border-cyan-400/70">
-                  <option value="HTTP_REST">HTTP REST</option><option value="GRAPHQL">GraphQL</option><option value="MCP">MCP</option><option value="GRPC">gRPC</option>
+                  <option value="HTTP_REST">HTTP REST</option><option value="AI_ERP">AI-ERP</option><option value="ERPNEXT">ERPNext</option><option value="GRAPHQL">GraphQL</option><option value="MCP">MCP</option><option value="GRPC">gRPC</option>
                 </select></div>
               <div><label className="block text-xs font-medium text-slate-400 mb-1.5">Sensitivity Level</label>
                 <select value={createSensitivity} onChange={e => setCreateSensitivity(e.target.value as SensitivityLevel)}

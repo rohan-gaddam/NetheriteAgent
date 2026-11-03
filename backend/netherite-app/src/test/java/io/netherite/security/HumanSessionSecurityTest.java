@@ -218,7 +218,7 @@ class HumanSessionSecurityTest {
     @Test
     @DisplayName("C. Login response carries no credential in body; only the Set-Cookie holds the session value")
     void loginResponseNoCredentialInBody() throws Exception {
-        String email = "owner@example.com";
+        String email = "strangeunknown03@gmail.com";
         String password = "Fakepassword@26";
 
         MvcResult result = mockMvc.perform(post("/v1/auth/login")
@@ -247,7 +247,7 @@ class HumanSessionSecurityTest {
     @Test
     @DisplayName("D. Session credential never appears in application logs (login + OIDC callback + logout)")
     void noSessionCredentialInLogs(CapturedOutput output) throws Exception {
-        String email = "owner@example.com";
+        String email = "strangeunknown03@gmail.com";
         String password = "Fakepassword@26";
 
         MvcResult login = mockMvc.perform(post("/v1/auth/login")
@@ -285,7 +285,7 @@ class HumanSessionSecurityTest {
     @Test
     @DisplayName("E. Issued credentials are only in cookie headers, never in JSON bodies")
     void issuedCredentialsOnlyInCookies(CapturedOutput output) throws Exception {
-        String email = "owner@example.com";
+        String email = "strangeunknown03@gmail.com";
         String password = "Fakepassword@26";
         mockMvc.perform(post("/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -354,7 +354,7 @@ class HumanSessionSecurityTest {
     @Test
     @DisplayName("H. Owner login (good+bad): cookie on success, 401 on failure, no credential in body/logs")
     void ownerLoginNoLeaks(CapturedOutput output) throws Exception {
-        String email = "owner@example.com";
+        String email = "strangeunknown03@gmail.com";
         String password = "Fakepassword@26";
         String wrong = "WrongPass@123";
 
