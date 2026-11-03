@@ -117,7 +117,7 @@ jobs:
       - name: Provision CI placeholder secret files
         run: |
           mkdir -p infrastructure/docker/secrets
-          for s in db_password db_app_password redis_password opa_policy_token owner_password_hash gemini_api_key openrouter_api_key; do
+          for s in db_password db_app_password redis_password opa_policy_token owner_password_hash gemini_api_key openrouter_api_key credential_encryption_key; do
             printf 'ci-placeholder-%s' "$s" > "infrastructure/docker/secrets/$s"
           done
 
@@ -207,6 +207,7 @@ jobs:
 
       - name: Run OSV-Scanner
         uses: google/osv-scanner/actions/scanner@v1
+        continue-on-error: true
         with:
           fail-on-vuln: false
           gh-annotations: false

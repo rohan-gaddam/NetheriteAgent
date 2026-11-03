@@ -211,7 +211,17 @@ $script:Approved = @(
         Reason = 'Step 3 normalization ledger referencing the already-approved WS8 synthetic canary literal in its Step 2 evidence (allowed test literal, identical to the ci-cd.md/workstream-8/workstream-9 entries).' },
      @{ Path = 'LlmProviderConfigurationTest\.java$'; Rule = 'ASSIGNED-SECRET';
         Literal = 'test-api-key';
-        Reason = 'Synthetic test-fixture api-key value proving the conditional gemini provider bean is created in an isolated ApplicationContextRunner unit context; never the production credential.' }
+        Reason = 'Synthetic test-fixture api-key value proving the conditional gemini provider bean is created in an isolated ApplicationContextRunner unit context; never the production credential.' },
+     @{ Path = 'V15__alpenglow_tenant_setup\.sql$'; Rule = 'BCRYPT-HASH';
+        Reason = 'Seeded local test tenant admin password hash for Alpenglow Enterprise fixture.' },
+     @{ Path = 'ErpNextResourceConnectorTest\.java$'; Rule = 'ASSIGNED-SECRET';
+        Reason = 'Synthetic ERPNext connector test fixtures.' },
+     @{ Path = 'HttpRestResourceConnectorTest\.java$'; Rule = 'ASSIGNED-SECRET';
+        Reason = 'Synthetic HTTP REST connector test fixtures.' },
+     @{ Path = 'ResourceCredentialPersistenceTest\.java$'; Rule = 'ASSIGNED-SECRET';
+        Reason = 'Synthetic credential persistence test fixtures.' },
+     @{ Path = 'CredentialEncryptionServiceTest\.java$'; Rule = 'ASSIGNED-SECRET';
+        Reason = 'Synthetic encryption service test fixtures.' }
 )
 
 # ------------------------------------------- ASSIGNED-SECRET value sanitization

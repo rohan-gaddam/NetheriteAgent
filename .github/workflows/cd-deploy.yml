@@ -87,6 +87,7 @@ jobs:
           printf '%s' "$REDIS_PW"   > infrastructure/docker/secrets/redis_password
           printf '%s' "$OPA_TOKEN"  > infrastructure/docker/secrets/opa_policy_token
           printf '%s' "$OWNER_HASH" > infrastructure/docker/secrets/owner_password_hash
+          openssl rand -base64 32   > infrastructure/docker/secrets/credential_encryption_key
           # Fail closed when the host explicitly requests Gemini but no key was
           # supplied to the Environment. Otherwise provision the file (the
           # default empty file is valid for LLM_PROVIDER=none; the app entrypoint

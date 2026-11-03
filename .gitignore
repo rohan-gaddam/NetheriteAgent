@@ -77,3 +77,4 @@ infrastructure/docker/opa/policies-data/
 # Local Agent Key
 agent_key.txt
 NETHERITEAGENT_CAPABILITY_AND_SECURITY_ASSESSMENT.md
+infrastructure/docker/scripts/ProvisionGatewayData.*
