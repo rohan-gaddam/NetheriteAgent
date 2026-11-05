@@ -268,4 +268,3 @@ The measurements were produced by local diagnostic harnesses and a dedicated sna
 
 ---
 
-_Last updated: November 5, 2026. This document records historical local test runs; rerun the experiments on representative deployment infrastructure before making production performance or availability claims._
